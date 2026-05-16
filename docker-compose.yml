@@ -1,0 +1,13 @@
+version: '3.8'
+
+services:
+  cyberkid:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: cyberkid
+    ports:
+      - "8080:80"
+    restart: unless-stopped
+    environment:
+      - NODE_ENV=production
