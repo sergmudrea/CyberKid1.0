@@ -3,8 +3,8 @@
 // LevelMap (рендеринг), Player (персонаж), CommandPanel (UI),
 // ExecutionEngine (выполнение команд), Pathfinder (оптимальный путь, звёзды),
 // HintSystem (подсказки), ExplorationMode (свободное исследование).
-// Обрабатывает загрузку уровня, сохранённой программы, запуск выполнения,
-// победу/поражение, запись прогресса.
+// Обрабатывает загрузку уровня (по levelId или прямому levelData), сохранённой программы,
+// запуск выполнения, победу/поражение, запись прогресса.
 
 import { Scene } from 'phaser';
 import { LevelData, Command, PathResult } from '../types/index';
@@ -40,13 +40,25 @@ export class GameScene extends Scene {
     super('GameScene');
   }
 
-  init(data: { levelId: string }): void {
-    this.levelId = data.levelId;
+  init(data: { levelId?: string; levelData?: LevelData }): void {
+    if (data.levelData) {
+      // Прямая передача уровня (для Arcade, Sandbox)
+      this.level = data.levelData;
+      this.levelId = this.level.id;
+    } else if (data.levelId) {
+      this.levelId = data.levelId;
+      this.level = null;
+    } else {
+      console.error('No level data provided');
+      this.scene.start('MainMenu');
+    }
   }
 
   async create(): Promise<void> {
-    // Загружаем уровень
-    this.level = await levelManager.loadLevel(this.levelId);
+    // Загружаем уровень, если ещё не загружен
+    if (!this.level) {
+      this.level = await levelManager.loadLevel(this.levelId);
+    }
     if (!this.level) {
       console.error(`Failed to load level ${this.levelId}`);
       this.scene.start('LevelSelect', { worldId: 'meadow', levelNum: 1 });
@@ -165,43 +177,44 @@ export class GameScene extends Scene {
 
   // ---------- Обработка событий ----------
   private setupEventListeners(): void {
-    eventBus.on('COMMAND_QUEUE_CHANGED', this.onCommandQueueChanged.bind(this));
-    eventBus.on('EXECUTION_START', this.onExecutionStart.bind(this));
-    eventBus.on('EXECUTION_FINISHED', this.onExecutionFinished.bind(this));
-    eventBus.on('EXECUTION_STEP', this.onExecutionStep.bind(this));
-    eventBus.on('PLAYER_MOVED', this.onPlayerMoved.bind(this));
-    eventBus.on('PLAYER_DIED', this.onPlayerDied.bind(this));
-    eventBus.on('EXPLORATION_TOGGLED', this.onExplorationToggled.bind(this));
-    eventBus.on('PROGRESS_UPDATED', this.onProgressUpdated.bind(this));
+    eventBus.on('COMMAND_QUEUE_CHANGED', this.onCommandQueueChanged);
+    eventBus.on('EXECUTION_START', this.onExecutionStart);
+    eventBus.on('EXECUTION_FINISHED', this.onExecutionFinished);
+    eventBus.on('EXECUTION_STEP', this.onExecutionStep);
+    eventBus.on('PLAYER_MOVED', this.onPlayerMoved);
+    eventBus.on('PLAYER_DIED', this.onPlayerDied);
+    eventBus.on('EXPLORATION_TOGGLED', this.onExplorationToggled);
+    eventBus.on('PROGRESS_UPDATED', this.onProgressUpdated);
   }
 
   private removeEventListeners(): void {
-    eventBus.off('COMMAND_QUEUE_CHANGED', this.onCommandQueueChanged.bind(this));
-    eventBus.off('EXECUTION_START', this.onExecutionStart.bind(this));
-    eventBus.off('EXECUTION_FINISHED', this.onExecutionFinished.bind(this));
-    eventBus.off('EXECUTION_STEP', this.onExecutionStep.bind(this));
-    eventBus.off('PLAYER_MOVED', this.onPlayerMoved.bind(this));
-    eventBus.off('PLAYER_DIED', this.onPlayerDied.bind(this));
-    eventBus.off('EXPLORATION_TOGGLED', this.onExplorationToggled.bind(this));
-    eventBus.off('PROGRESS_UPDATED', this.onProgressUpdated.bind(this));
+    eventBus.off('COMMAND_QUEUE_CHANGED', this.onCommandQueueChanged);
+    eventBus.off('EXECUTION_START', this.onExecutionStart);
+    eventBus.off('EXECUTION_FINISHED', this.onExecutionFinished);
+    eventBus.off('EXECUTION_STEP', this.onExecutionStep);
+    eventBus.off('PLAYER_MOVED', this.onPlayerMoved);
+    eventBus.off('PLAYER_DIED', this.onPlayerDied);
+    eventBus.off('EXPLORATION_TOGGLED', this.onExplorationToggled);
+    eventBus.off('PROGRESS_UPDATED', this.onProgressUpdated);
   }
 
-  private onCommandQueueChanged(payload: any): void {
+  // Стрелочные функции для корректной отписки
+  private onCommandQueueChanged = (payload: any): void => {
     if (payload && payload.commands) {
       this.currentProgram = payload.commands;
       if (!this.isExecuting) {
         saveManager.saveProgram(this.levelId, this.currentProgram, false);
       }
     }
-  }
+  };
 
-  private onExecutionStart(): void {
+  private onExecutionStart = (): void => {
     this.isExecuting = true;
     if (this.commandPanel) this.commandPanel.setExecuting(true);
     if (this.hintSystem) this.hintSystem.setActive(false);
-  }
+  };
 
-  private onExecutionFinished(payload: any): void {
+  private onExecutionFinished = (payload: any): void => {
     this.isExecuting = false;
     if (this.commandPanel) this.commandPanel.setExecuting(false);
     if (this.hintSystem && !this.explorationMode?.isActive()) {
@@ -212,9 +225,9 @@ export class GameScene extends Scene {
     } else if (payload && !payload.success) {
       this.handleDefeat();
     }
-  }
+  };
 
-  private onExecutionStep(): void {
+  private onExecutionStep = (): void => {
     if (this.hintSystem && this.player && this.level) {
       this.hintSystem.updateState(
         this.player.getPosition(),
@@ -223,9 +236,9 @@ export class GameScene extends Scene {
         this.level.objects.monsters
       );
     }
-  }
+  };
 
-  private onPlayerMoved(): void {
+  private onPlayerMoved = (): void => {
     if (this.hintSystem && this.player && this.level) {
       this.hintSystem.updateState(
         this.player.getPosition(),
@@ -234,21 +247,21 @@ export class GameScene extends Scene {
         this.level.objects.monsters
       );
     }
-  }
+  };
 
-  private onPlayerDied(): void {
+  private onPlayerDied = (): void => {
     this.handleDefeat();
-  }
+  };
 
-  private onExplorationToggled(payload: any): void {
+  private onExplorationToggled = (payload: any): void => {
     if (payload && this.level && this.pathfinder) {
       this.pathfinder.setExplorationMode(payload.enabled);
     }
-  }
+  };
 
-  private onProgressUpdated(): void {
+  private onProgressUpdated = (): void => {
     this.updateUI();
-  }
+  };
 
   // ---------- Игровая логика ----------
   private async handleVictory(result: PathResult): Promise<void> {
@@ -258,14 +271,13 @@ export class GameScene extends Scene {
     const explorationUsed = this.explorationMode?.isActive() || false;
     const backdoorUsed = result.backdoorFound;
 
-    // Сохраняем прогресс — порядок аргументов: levelId, stars, blackStar, steps, explorationUsed, backdoorUsed, optimalSteps
     progressManager.completeLevel(
       this.levelId,
       result.starsEarned,
-      backdoorUsed,           // blackStar
+      backdoorUsed,
       result.stepsCount,
-      explorationUsed,        // explorationUsed
-      backdoorUsed,           // backdoorUsed
+      explorationUsed,
+      backdoorUsed,
       this.level?.optimalSteps || 0
     );
 
@@ -296,9 +308,7 @@ export class GameScene extends Scene {
     if (this.commandPanel) this.commandPanel.setExecuting(false);
     const lang = settingsManager.get().language;
     const msg = lang === 'ru' ? 'Вы проиграли! Попробуйте снова.' : 'You lost! Try again.';
-    // Временно используем alert, позже заменить на кастомный тост
     alert(msg);
-    // Сохраняем текущую программу перед перезагрузкой
     saveManager.saveProgram(this.levelId, this.currentProgram, false);
     this.resetLevel();
   }
