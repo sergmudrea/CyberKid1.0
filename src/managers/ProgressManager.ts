@@ -10,6 +10,7 @@ import {
 } from '../types/index';
 import { gameEvents as eventBus } from '../core/EventBus';
 import { settingsManager } from './SettingsManager';
+import { levelManager } from './LevelManager';
 
 const STORAGE_KEY = 'cyberkid_progress';
 const DEFAULT_ACHIEVEMENTS: Achievement[] = [
@@ -37,7 +38,6 @@ export class ProgressManager {
 
   private constructor() {
     this.progress = this.loadFromLocalStorage();
-    // Если нет достижений, добавить дефолтные
     if (!this.progress.achievements || this.progress.achievements.length === 0) {
       this.progress.achievements = JSON.parse(JSON.stringify(DEFAULT_ACHIEVEMENTS));
       this.saveToLocalStorage();
@@ -105,7 +105,6 @@ export class ProgressManager {
 
     this.progress.levelStats[levelId] = stats;
 
-    // Обновляем общие счётчики
     if (!wasCompleted) {
       this.progress.levelsCompleted.push(levelId);
     }
@@ -115,7 +114,6 @@ export class ProgressManager {
       }
     }
 
-    // Пересчёт totalStars и totalBlackStars
     let totalStars = 0;
     let totalBlackStars = 0;
     for (const st of Object.values(this.progress.levelStats)) {
@@ -125,13 +123,8 @@ export class ProgressManager {
     this.progress.totalStars = totalStars;
     this.progress.totalBlackStars = totalBlackStars;
 
-    // Обновляем достижения (без промежуточных сохранений внутри)
     this.updateAchievementsOnComplete(levelId, stars, blackStar, explorationUsed, backdoorUsed, stepsUsed, optimalSteps);
-
-    // Авто-разблокировка следующего мира (заглушка)
     this.checkWorldUnlockByCompletion();
-
-    // Единое сохранение и уведомление
     this.saveToLocalStorage();
     this.notifyListeners();
     eventBus.emit('PROGRESS_UPDATED', this.progress);
@@ -161,7 +154,6 @@ export class ProgressManager {
 
   // Запись использования Exploration Mode
   public recordExplorationUsed(levelId: string): void {
-    // Убедимся, что запись уровня существует
     if (!this.progress.levelStats[levelId]) {
       this.progress.levelStats[levelId] = {
         stars: 0,
@@ -178,9 +170,7 @@ export class ProgressManager {
     if (!stats.explorationUsed) {
       stats.explorationUsed = true;
       this.progress.explorationUsedCount += 1;
-      // Сначала обновляем достижения
       this.updateAchievementsOnExploration();
-      // Затем сохраняем и уведомляем
       this.saveToLocalStorage();
       this.notifyListeners();
       eventBus.emit('PROGRESS_UPDATED', this.progress);
@@ -189,7 +179,6 @@ export class ProgressManager {
 
   // Запись найденного бэкдора
   public recordBackdoorFound(levelId: string, backdoorType: string): void {
-    // Убедимся, что запись уровня существует
     if (!this.progress.levelStats[levelId]) {
       this.progress.levelStats[levelId] = {
         stars: 0,
@@ -206,9 +195,7 @@ export class ProgressManager {
     if (!stats.backdoorUsed) {
       stats.backdoorUsed = true;
       this.progress.backdoorsFound += 1;
-      // Сначала обновляем достижения (хоть метод пуст, но для единообразия)
       this.updateAchievementsOnBackdoor();
-      // Затем сохраняем и уведомляем
       this.saveToLocalStorage();
       this.notifyListeners();
       eventBus.emit('PROGRESS_UPDATED', this.progress);
@@ -225,6 +212,39 @@ export class ProgressManager {
       eventBus.emit('WORLD_UNLOCKED', { worldId });
       eventBus.emit('PROGRESS_UPDATED', this.progress);
     }
+  }
+
+  // Сбросить прогресс конкретного мира
+  public resetWorldProgress(worldId: string): void {
+    const levelIds = levelManager.getLevelIdsForWorld(worldId);
+    for (const levelId of levelIds) {
+      if (this.progress.levelStats[levelId]) {
+        this.progress.levelStats[levelId] = {
+          stars: 0,
+          blackStar: false,
+          attempts: 0,
+          bestSteps: Infinity,
+          completed: false,
+          explorationUsed: false,
+          backdoorUsed: false,
+          lastPlayed: Date.now(),
+        };
+      }
+    }
+    // Пересчитываем общие счётчики
+    let totalStars = 0;
+    let totalBlackStars = 0;
+    for (const st of Object.values(this.progress.levelStats)) {
+      totalStars += st.stars;
+      if (st.blackStar) totalBlackStars++;
+    }
+    this.progress.totalStars = totalStars;
+    this.progress.totalBlackStars = totalBlackStars;
+    this.progress.levelsCompleted = this.progress.levelsCompleted.filter(id => !levelIds.includes(id));
+    this.progress.perfectLevels = this.progress.perfectLevels.filter(id => !levelIds.includes(id));
+    this.saveToLocalStorage();
+    this.notifyListeners();
+    eventBus.emit('PROGRESS_UPDATED', this.progress);
   }
 
   // Обновить настройки (сохраняются в прогресс)
@@ -252,7 +272,6 @@ export class ProgressManager {
   public importProgress(json: string): boolean {
     try {
       const imported = JSON.parse(json) as PlayerProgress;
-      // Базовая валидация
       if (imported && typeof imported.totalStars === 'number') {
         this.progress = imported;
         this.saveToLocalStorage();
@@ -376,6 +395,7 @@ export class ProgressManager {
 
   private checkWorldUnlockByCompletion(): void {
     // Заглушка. В реальной реализации будет связь с LevelManager и конфигом миров.
+    // Например, если завершено 500 уровней Meadow, разблокировать Ocean.
   }
 
   private updateAchievementsOnComplete(
@@ -387,17 +407,14 @@ export class ProgressManager {
     stepsUsed: number,
     optimalSteps: number
   ): void {
-    // first_star
     if (stars >= 1 && !this.findAchievement('first_star')?.unlocked) {
       this.unlockAchievement('first_star');
     }
-    // star_collector
     const starCollector = this.findAchievement('star_collector');
     if (starCollector && !starCollector.unlocked) {
       starCollector.progress = (starCollector.progress || 0) + stars;
       if (starCollector.progress >= 100) this.unlockAchievement('star_collector');
     }
-    // black_star_hunter
     if (blackStar) {
       const blackHunter = this.findAchievement('black_star_hunter');
       if (blackHunter && !blackHunter.unlocked) {
@@ -405,7 +422,6 @@ export class ProgressManager {
         if (blackHunter.progress >= 10) this.unlockAchievement('black_star_hunter');
       }
     }
-    // perfectionist — увеличиваем прогресс только если уровень ещё не в perfectLevels
     if (stars === 3 && !explorationUsed) {
       const perfectionist = this.findAchievement('perfectionist');
       if (perfectionist && !perfectionist.unlocked) {
@@ -416,15 +432,12 @@ export class ProgressManager {
         }
       }
     }
-    // no_exploration
     if (!explorationUsed && !this.findAchievement('no_exploration')?.unlocked) {
       this.unlockAchievement('no_exploration');
     }
-    // backdoor_master
     if (backdoorUsed && !this.findAchievement('backdoor_master')?.unlocked) {
       this.unlockAchievement('backdoor_master');
     }
-    // speedrunner (если stepsUsed < optimalSteps)
     if (stepsUsed < optimalSteps && !this.findAchievement('speedrunner')?.unlocked) {
       this.unlockAchievement('speedrunner');
     }
@@ -451,7 +464,6 @@ export class ProgressManager {
     if (ach && !ach.unlocked) {
       ach.unlocked = true;
       ach.unlockedAt = Date.now();
-      // Не сохраняем и не нотифицируем здесь — это сделает вызывающий метод
       eventBus.emit('ACHIEVEMENT_UNLOCKED', { achievementId: id });
     }
   }
