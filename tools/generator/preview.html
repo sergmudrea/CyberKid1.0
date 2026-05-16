@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Level Preview</title>
+  <style>
+    body { background: #1a1a2e; color: #fff; font-family: monospace; display: flex; gap: 20px; padding: 20px; }
+    canvas { border: 2px solid #00ffcc; image-rendering: crisp-edges; }
+    .info { background: #2a2a4a; padding: 10px; border-radius: 8px; }
+    input { margin-top: 10px; }
+  </style>
+</head>
+<body>
+  <div>
+    <canvas id="canvas" width="480" height="480"></canvas>
+    <div>
+      <input type="file" id="fileInput" accept=".json" />
+      <button id="loadBtn">Load Level</button>
+    </div>
+  </div>
+  <div class="info" id="info"></div>
+  <script>
+    const canvas = document.getElementById('canvas');
+    const ctx = canvas.getContext('2d');
+    const infoDiv = document.getElementById('info');
+    let level = null;
+    const TILE_SIZE = 32;
+    const TILE_COLORS = {
+      0: '#8B5A2B', 1: '#87CEEB', 2: '#000', 3: '#A52A2A', 4: '#555'
+    };
+    function drawLevel() {
+      if (!level) return;
+      const { width, height, map, startPos, coinPos } = level;
+      canvas.width = width * TILE_SIZE;
+      canvas.height = height * TILE_SIZE;
+      for (let row = 0; row < height; row++) {
+        for (let col = 0; col < width; col++) {
+          const tile = map[row][col];
+          ctx.fillStyle = TILE_COLORS[tile] || '#CCC';
+          ctx.fillRect(col * TILE_SIZE, row * TILE_SIZE, TILE_SIZE, TILE_SIZE);
+          ctx.strokeStyle = '#aaa';
+          ctx.strokeRect(col * TILE_SIZE, row * TILE_SIZE, TILE_SIZE, TILE_SIZE);
+        }
+      }
+      ctx.fillStyle = '#0f0';
+      ctx.fillRect(startPos.col * TILE_SIZE, startPos.row * TILE_SIZE, TILE_SIZE, TILE_SIZE);
+      ctx.fillStyle = '#FFD700';
+      ctx.fillRect(coinPos.col * TILE_SIZE, coinPos.row * TILE_SIZE, TILE_SIZE, TILE_SIZE);
+      infoDiv.innerHTML = `<strong>${level.name}</strong><br>ID: ${level.id}<br>Size: ${width}x${height}<br>Start: ${startPos.col},${startPos.row}<br>Coin: ${coinPos.col},${coinPos.row}`;
+    }
+    document.getElementById('loadBtn').addEventListener('click', () => {
+      const file = document.getElementById('fileInput').files[0];
+      if (!file) return;
+      const reader = new FileReader();
+      reader.onload = e => {
+        level = JSON.parse(e.target.result);
+        drawLevel();
+      };
+      reader.readAsText(file);
+    });
+  </script>
+</body>
+</html>
