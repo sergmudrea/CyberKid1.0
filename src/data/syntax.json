@@ -1,0 +1,19 @@
+{
+  "commands": {
+    "UP": { "icon": "⬆️", "labelRu": "Вверх", "labelEn": "Up", "python": "move_up()", "js": "moveUp()" },
+    "DOWN": { "icon": "⬇️", "labelRu": "Вниз", "labelEn": "Down", "python": "move_down()", "js": "moveDown()" },
+    "LEFT": { "icon": "⬅️", "labelRu": "Влево", "labelEn": "Left", "python": "move_left()", "js": "moveLeft()" },
+    "RIGHT": { "icon": "➡️", "labelRu": "Вправо", "labelEn": "Right", "python": "move_right()", "js": "moveRight()" },
+    "FOR_N": { "icon": "🔁", "labelRu": "Повторить N раз", "labelEn": "Repeat N", "python": "for i in range(N):", "js": "for (let i=0; i<N; i++) {" },
+    "IF_WALL": { "icon": "🧱", "labelRu": "Если стена", "labelEn": "If wall", "python": "if wall_ahead():", "js": "if (wallAhead()) {" },
+    "DRILL": { "icon": "🔧", "labelRu": "Дрель", "labelEn": "Drill", "python": "drill()", "js": "drill();" },
+    "PICKUP": { "icon": "📦", "labelRu": "Подобрать", "labelEn": "Pickup", "python": "pickup()", "js": "pickup();" },
+    "WAIT": { "icon": "⏳", "labelRu": "Ждать", "labelEn": "Wait", "python": "wait()", "js": "wait();" }
+  },
+  "learningModeConfig": {
+    "kiddo": { "showSyntax": false, "showLabels": false, "showIcons": true },
+    "scholar": { "showSyntax": false, "showLabels": true, "showIcons": true },
+    "dev_student": { "showSyntax": true, "showLabels": true, "showIcons": true },
+    "developer": { "showSyntax": true, "showLabels": false, "showIcons": false }
+  }
+}
