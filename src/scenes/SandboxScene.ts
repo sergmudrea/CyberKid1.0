@@ -68,22 +68,23 @@ export class SandboxScene extends Scene {
   }
 
   private setupEventListeners(): void {
-    eventBus.on('SANDBOX_LEVEL_SAVED', this.onLevelSaved.bind(this));
+    eventBus.on('SANDBOX_LEVEL_SAVED', this.onLevelSaved);
   }
 
-  private onLevelSaved(payload: any): void {
+  // Стрелочная функция для корректной отписки
+  private onLevelSaved = (payload: any): void => {
     if (payload && payload.levelData) {
       this.isTestMode = true;
       sessionStorage.setItem('test_level', JSON.stringify(payload.levelData));
       this.scene.start('GameScene', { levelId: 'test_level' });
     }
-  }
+  };
 
   private cleanup(): void {
     if (this.sandboxMaker) {
       this.sandboxMaker.destroy();
       this.sandboxMaker = null;
     }
-    eventBus.off('SANDBOX_LEVEL_SAVED', this.onLevelSaved.bind(this));
+    eventBus.off('SANDBOX_LEVEL_SAVED', this.onLevelSaved);
   }
 }
