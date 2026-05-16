@@ -1,0 +1,11 @@
+{
+  "worlds": [
+    { "id": "meadow", "name": "Meadow", "nameEn": "Meadow", "icon": "🌾", "order": 1, "levelsCount": 500, "isLocked": false, "difficultyRange": [0,15] },
+    { "id": "ocean", "name": "Ocean", "nameEn": "Ocean", "icon": "🌊", "order": 2, "levelsCount": 500, "isLocked": true, "priceSku": "world_ocean", "difficultyRange": [15,30] },
+    { "id": "clouds", "name": "Clouds", "nameEn": "Clouds", "icon": "☁️", "order": 3, "levelsCount": 500, "isLocked": true, "priceSku": "world_clouds", "difficultyRange": [30,50] },
+    { "id": "fairytale", "name": "Fairytale", "nameEn": "Fairytale", "icon": "🏰", "order": 4, "levelsCount": 500, "isLocked": true, "priceSku": "world_fairytale", "difficultyRange": [50,70] },
+    { "id": "volcano", "name": "Volcano", "nameEn": "Volcano", "icon": "🌋", "order": 5, "levelsCount": 500, "isLocked": true, "priceSku": "world_volcano", "difficultyRange": [70,90] },
+    { "id": "arcade", "name": "Arcade", "nameEn": "Arcade", "icon": "🎮", "order": 6, "levelsCount": 0, "isLocked": false, "difficultyRange": [0,100] },
+    { "id": "bonus", "name": "Bonus", "nameEn": "Bonus", "icon": "⭐", "order": 7, "levelsCount": 3000, "isLocked": true, "priceSku": "world_bonus", "difficultyRange": [90,100] }
+  ]
+}
