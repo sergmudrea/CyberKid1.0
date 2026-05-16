@@ -750,3 +750,5 @@ MIT License — See LICENSE file.
 sergmudrea — Game architect, curriculum designer, full-stack developer.
 
 "Code is the new literacy. We teach reading through stories. We should teach programming through play."
+
+⭐ Star this repository if you believe programming education needs a revolution.
