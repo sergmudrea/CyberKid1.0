@@ -1,0 +1,345 @@
+// src/modules/Player.ts
+// Эйдо: Управление персонажем (позиция, направление, инвентарь, клоны, верховая езда).
+// Эмитит события через EventBus: PLAYER_MOVED, PLAYER_DIED, INVENTORY_CHANGED, CLONE_CREATED и др.
+
+import { Point, Inventory, Monster, Command } from '../types/index';
+import { gameEvents as eventBus } from '../core/EventBus';
+
+export interface CloneInfo {
+  id: string;
+  position: Point;
+  inventory: Inventory;
+  commands: Command[];
+  currentCommandIndex: number;
+}
+
+export class Player {
+  private position: Point;
+  private direction: 'up' | 'down' | 'left' | 'right';
+  private inventory: Inventory;
+  private isAlive: boolean = true;
+  private isGhostMode: boolean = false;      // Exploration mode
+  private clones: CloneInfo[] = [];
+  private riddenMonster: Monster | null = null; // верховая езда
+  private levelBounds: { width: number; height: number };
+  private tileMap: (col: number, row: number) => number; // функция получения типа тайла (для коллизий)
+
+  constructor(
+    startPos: Point,
+    startDir: 'up' | 'down' | 'left' | 'right',
+    levelWidth: number,
+    levelHeight: number,
+    tileGetter: (col: number, row: number) => number
+  ) {
+    this.position = { ...startPos };
+    this.direction = startDir;
+    this.levelBounds = { width: levelWidth, height: levelHeight };
+    this.tileMap = tileGetter;
+    this.inventory = {
+      keys: [],
+      corn: 0,
+      cores: 0,
+      hasDrill: false,
+      hasHook: false,
+      hasWing: false,
+      hasBait: false,
+      tools: [],
+    };
+  }
+
+  // ---------- Геттеры ----------
+  public getPosition(): Point {
+    return { ...this.position };
+  }
+
+  public getDirection(): 'up' | 'down' | 'left' | 'right' {
+    return this.direction;
+  }
+
+  public getInventory(): Inventory {
+    return { ...this.inventory };
+  }
+
+  public isPlayerAlive(): boolean {
+    return this.isAlive;
+  }
+
+  public isGhost(): boolean {
+    return this.isGhostMode;
+  }
+
+  public getClones(): CloneInfo[] {
+    return [...this.clones];
+  }
+
+  public getRiddenMonster(): Monster | null {
+    return this.riddenMonster ? { ...this.riddenMonster } : null;
+  }
+
+  // ---------- Управление режимами ----------
+  public setGhostMode(enabled: boolean): void {
+    this.isGhostMode = enabled;
+    if (enabled) {
+      eventBus.emit('EXPLORATION_TOGGLED', { enabled: true, penaltyWarningShown: true });
+    } else {
+      eventBus.emit('EXPLORATION_TOGGLED', { enabled: false, penaltyWarningShown: false });
+    }
+  }
+
+  // ---------- Движение и коллизии ----------
+  public move(direction: 'up' | 'down' | 'left' | 'right'): boolean {
+    if (!this.isAlive) return false;
+    const delta = this.directionToDelta(direction);
+    const newPos = { col: this.position.col + delta.col, row: this.position.row + delta.row };
+    if (!this.isWithinBounds(newPos)) return false;
+    const tile = this.tileMap(newPos.col, newPos.row);
+    if (!this.canEnterTile(tile)) return false;
+
+    const oldPos = { ...this.position };
+    this.position = newPos;
+    this.direction = direction;
+
+    eventBus.emit('PLAYER_MOVED', { from: oldPos, to: this.position });
+    return true;
+  }
+
+  // Принудительная телепортация (без проверок)
+  public teleport(point: Point): void {
+    const oldPos = { ...this.position };
+    this.position = { ...point };
+    eventBus.emit('PLAYER_MOVED', { from: oldPos, to: this.position });
+  }
+
+  // Применить эффект конвейера (вызывается из ExecutionEngine)
+  public applyConveyor(conveyorDir: 'up' | 'down' | 'left' | 'right'): boolean {
+    if (!this.isAlive) return false;
+    const delta = this.directionToDelta(conveyorDir);
+    const newPos = { col: this.position.col + delta.col, row: this.position.row + delta.row };
+    if (!this.isWithinBounds(newPos)) return false;
+    const tile = this.tileMap(newPos.col, newPos.row);
+    if (!this.canEnterTile(tile)) return false;
+    const oldPos = { ...this.position };
+    this.position = newPos;
+    eventBus.emit('PLAYER_MOVED', { from: oldPos, to: this.position });
+    return true;
+  }
+
+  // Применить пружину (вызывается из ExecutionEngine)
+  public applySpring(launchDir: 'up' | 'down' | 'left' | 'right', force: number = 3): boolean {
+    if (!this.isAlive) return false;
+    let currentPos = { ...this.position };
+    for (let i = 0; i < force; i++) {
+      const delta = this.directionToDelta(launchDir);
+      const nextPos = { col: currentPos.col + delta.col, row: currentPos.row + delta.row };
+      if (!this.isWithinBounds(nextPos)) return false;
+      const tile = this.tileMap(nextPos.col, nextPos.row);
+      if (!this.canEnterTile(tile)) return false;
+      currentPos = nextPos;
+    }
+    const oldPos = { ...this.position };
+    this.position = currentPos;
+    eventBus.emit('PLAYER_MOVED', { from: oldPos, to: this.position });
+    return true;
+  }
+
+  // ---------- Инвентарь ----------
+  public addKey(keyId: string): void {
+    if (!this.inventory.keys.includes(keyId)) {
+      this.inventory.keys.push(keyId);
+      this.emitInventoryChanged();
+    }
+  }
+
+  public useKey(keyId: string): boolean {
+    const index = this.inventory.keys.indexOf(keyId);
+    if (index !== -1) {
+      this.inventory.keys.splice(index, 1);
+      this.emitInventoryChanged();
+      return true;
+    }
+    return false;
+  }
+
+  public addCorn(amount: number = 1): void {
+    this.inventory.corn += amount;
+    this.emitInventoryChanged();
+  }
+
+  public useCorn(): boolean {
+    if (this.inventory.corn > 0) {
+      this.inventory.corn--;
+      this.emitInventoryChanged();
+      return true;
+    }
+    return false;
+  }
+
+  public addCore(amount: number = 1): void {
+    this.inventory.cores += amount;
+    this.emitInventoryChanged();
+  }
+
+  public useCore(): boolean {
+    if (this.inventory.cores > 0) {
+      this.inventory.cores--;
+      this.emitInventoryChanged();
+      return true;
+    }
+    return false;
+  }
+
+  public addTool(tool: 'drill' | 'hook' | 'wing' | 'bait'): void {
+    switch (tool) {
+      case 'drill': this.inventory.hasDrill = true; break;
+      case 'hook': this.inventory.hasHook = true; break;
+      case 'wing': this.inventory.hasWing = true; break;
+      case 'bait': this.inventory.hasBait = true; break;
+    }
+    if (!this.inventory.tools.includes(tool)) this.inventory.tools.push(tool);
+    this.emitInventoryChanged();
+  }
+
+  public useTool(tool: 'drill' | 'hook' | 'wing' | 'bait'): boolean {
+    let has = false;
+    switch (tool) {
+      case 'drill': has = this.inventory.hasDrill; if (has) this.inventory.hasDrill = false; break;
+      case 'hook': has = this.inventory.hasHook; if (has) this.inventory.hasHook = false; break;
+      case 'wing': has = this.inventory.hasWing; if (has) this.inventory.hasWing = false; break;
+      case 'bait': has = this.inventory.hasBait; if (has) this.inventory.hasBait = false; break;
+    }
+    if (has) {
+      this.inventory.tools = this.inventory.tools.filter(t => t !== tool);
+      this.emitInventoryChanged();
+      return true;
+    }
+    return false;
+  }
+
+  // ---------- Смерть и сброс ----------
+  public kill(cause: string): void {
+    if (this.isGhostMode) return;
+    this.isAlive = false;
+    eventBus.emit('PLAYER_DIED', { cause });
+  }
+
+  public revive(startPos: Point, startDir: 'up' | 'down' | 'left' | 'right'): void {
+    this.position = { ...startPos };
+    this.direction = startDir;
+    this.isAlive = true;
+    this.resetInventory();
+    // Клоны при возрождении уничтожаются
+    this.clones = [];
+    this.riddenMonster = null;
+  }
+
+  public resetInventory(): void {
+    this.inventory = {
+      keys: [],
+      corn: 0,
+      cores: 0,
+      hasDrill: false,
+      hasHook: false,
+      hasWing: false,
+      hasBait: false,
+      tools: [],
+    };
+    this.emitInventoryChanged();
+  }
+
+  // ---------- Клонирование ----------
+  public createClone(cloneId: string, position: Point, commands: Command[]): void {
+    const newClone: CloneInfo = {
+      id: cloneId,
+      position: { ...position },
+      inventory: { ...this.inventory }, // клон получает копию инвентаря
+      commands: [...commands],
+      currentCommandIndex: 0,
+    };
+    this.clones.push(newClone);
+    eventBus.emit('CLONE_CREATED', { cloneId, pos: position });
+  }
+
+  public removeClone(cloneId: string): void {
+    this.clones = this.clones.filter(c => c.id !== cloneId);
+  }
+
+  public getClone(cloneId: string): CloneInfo | undefined {
+    return this.clones.find(c => c.id === cloneId);
+  }
+
+  public updateClonePosition(cloneId: string, newPos: Point): void {
+    const clone = this.getClone(cloneId);
+    if (clone) {
+      clone.position = { ...newPos };
+    }
+  }
+
+  public joinClones(): void {
+    for (const clone of this.clones) {
+      for (const key of clone.inventory.keys) {
+        if (!this.inventory.keys.includes(key)) this.inventory.keys.push(key);
+      }
+      this.inventory.corn += clone.inventory.corn;
+      this.inventory.cores += clone.inventory.cores;
+      if (clone.inventory.hasDrill) this.inventory.hasDrill = true;
+      if (clone.inventory.hasHook) this.inventory.hasHook = true;
+      if (clone.inventory.hasWing) this.inventory.hasWing = true;
+      if (clone.inventory.hasBait) this.inventory.hasBait = true;
+      for (const tool of clone.inventory.tools) {
+        if (!this.inventory.tools.includes(tool)) this.inventory.tools.push(tool);
+      }
+    }
+    this.clones = [];
+    this.emitInventoryChanged();
+    // Эмитируем событие объединения клонов (опционально)
+    eventBus.emit('PLAYER_MOVED', { from: this.position, to: this.position });
+  }
+
+  // ---------- Верховая езда ----------
+  public rideMonster(monster: Monster): void {
+    if (this.riddenMonster) this.dismountMonster();
+    this.riddenMonster = { ...monster };
+    this.riddenMonster.isRidden = true;
+    this.position = { ...monster.position };
+    eventBus.emit('MONSTER_TAMED', { monsterId: monster.id });
+  }
+
+  public dismountMonster(): void {
+    if (this.riddenMonster) {
+      this.riddenMonster.isRidden = false;
+      this.riddenMonster = null;
+    }
+  }
+
+  public isRiding(): boolean {
+    return this.riddenMonster !== null;
+  }
+
+  // ---------- Приватные вспомогательные методы ----------
+  private directionToDelta(dir: 'up' | 'down' | 'left' | 'right'): { col: number; row: number } {
+    switch (dir) {
+      case 'up': return { col: 0, row: -1 };
+      case 'down': return { col: 0, row: 1 };
+      case 'left': return { col: -1, row: 0 };
+      case 'right': return { col: 1, row: 0 };
+    }
+  }
+
+  private isWithinBounds(pos: Point): boolean {
+    return pos.col >= 0 && pos.col < this.levelBounds.width && pos.row >= 0 && pos.row < this.levelBounds.height;
+  }
+
+  private canEnterTile(tile: number): boolean {
+    // Проверяем только физические препятствия (стены, ямы, лава/вода без крыльев/ghost mode)
+    if (tile === 4 || tile === 5) return false; // WALL, FAKE_WALL (требуется drill)
+    if (tile === 2 && !this.inventory.hasWing && !this.isGhostMode) return false; // HOLE
+    if ((tile === 32 || tile === 33) && !this.isGhostMode) return false; // LAVA, WATER
+    // Двери (tile 11) не проверяются здесь — это ответственность ExecutionEngine
+    // Мосты (tile 34) — активность проверяется ExecutionEngine
+    return true;
+  }
+
+  private emitInventoryChanged(): void {
+    eventBus.emit('INVENTORY_CHANGED', { inventory: this.getInventory() });
+  }
+}
