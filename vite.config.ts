@@ -1,6 +1,28 @@
+// vite.config.ts
+// ПРОМЕТЕЙ: Конфигурация Vite с плагином для автоматической генерации манифеста уровней.
+// Добавлен вызов скрипта generate-level-manifest.js перед каждой сборкой (build).
+// Также настроены алиасы, PWA, оптимизация для Capacitor.
+
 import { defineConfig } from 'vite';
 import path from 'path';
 import { VitePWA } from 'vite-plugin-pwa';
+import { execSync } from 'child_process';
+
+// Плагин для генерации манифеста уровней перед сборкой
+function levelManifestPlugin() {
+  return {
+    name: 'level-manifest-generator',
+    buildStart() {
+      console.log('🔧 Generating level manifest...');
+      try {
+        execSync('node scripts/generate-level-manifest.js', { stdio: 'inherit' });
+        console.log('✅ Level manifest generated successfully');
+      } catch (error) {
+        console.error('❌ Failed to generate level manifest:', error);
+      }
+    },
+  };
+}
 
 export default defineConfig({
   base: './',
@@ -26,6 +48,7 @@ export default defineConfig({
     },
   },
   plugins: [
+    levelManifestPlugin(),
     VitePWA({
       registerType: 'autoUpdate',
       includeAssets: ['favicon.ico', 'apple-touch-icon.png', 'mask-icon.svg'],
