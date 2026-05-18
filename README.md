@@ -24,10 +24,11 @@
 10. [Development Guide](#-development-guide)
 11. [Testing](#-testing)
 12. [Deployment](#-deployment)
-13. [Monetization](#-monetization)
-14. [License](#-license)
-15. [Contact](#-contact)
-16. [Credits](#-credits)
+13. [Monetization & IAP Integration](#-monetization--iap-integration)
+14. [Arcade Backend](#-arcade-backend)
+15. [License](#-license)
+16. [Contact](#-contact)
+17. [Credits](#-credits)
 
 ---
 
@@ -45,10 +46,12 @@ With over **2500+ built-in levels** across 6 themed worlds and an infinite Arcad
 - ✅ **Four solution paths** per level (Easy, Mid, Hard, Backdoor) rewarding creativity
 - ✅ **Exploration Mode** – free roam to inspect levels without penalty (max 2 stars)
 - ✅ **Built-in level editor (Sandbox Maker)** – create and share your own levels
-- ✅ **Arcade** – community levels with rating, search, and filters
+- ✅ **Arcade** – community levels with rating, search, and filters (backend included)
 - ✅ **Full offline support** (PWA + service worker)
 - ✅ **Cross-platform** – Web, Android (Capacitor), iOS (Capacitor)
 - ✅ **Developer Mode** – see real Python/JavaScript code for each command
+- ✅ **Full OOP support** – classes, objects, methods, inheritance
+- ✅ **Parallelism** – clone and join commands for concurrent execution
 
 ---
 
@@ -103,75 +106,18 @@ CyberKid takes the opposite approach: **embodied programming**. Every programmin
 | 6 | **Arcade** 🎮 | ∞ | 5×5 → 20×20 | User-generated content, Sandbox Maker | Any |
 | ★ | **Bonus** ⭐ | 3000+ | 10×10 → 20×20 | Hidden mechanics, neuro-stabilizers, mirrors | 90–100 |
 
-### Difficulty Scaling Formula
-
-Grid size = minSize + (maxSize - minSize) × (levelNum / totalLevels)
-Obstacle density = startDensity + (endDensity - startDensity) × progress
-Optimal steps = baseMoves + movesPerLevel × levelNum (capped)
-text
-
-
 ---
 
 ## ⚙️ Core Mechanics (45+)
 
-### Terrain & Environment (11)
-1. **Platform** – walkable ground (basic movement)
-2. **Sky** – empty space (boundaries)
-3. **Pit (Hole)** – fatal fall (obstacle avoidance)
-4. **Brick** – pushable block (object manipulation)
-5. **Wall** – impassable barrier (path planning)
-6. **Fake Wall** – passable illusion (debugging)
-7. **Ladder** – vertical climbing (multi-axis navigation)
-8. **Floating Platform** – moving ground (dynamic environments)
-9. **Magnet** – pull/push force (external forces)
-10. **Mirror** – reflection (recursion)
-11. **Sensor** – detection trigger (event-driven)
+*(Full list in [Research.md](Research.md))*
 
-### Transport (6)
-12. **Conveyor (4 dir)** – automatic movement (event loops)
-13. **Spring** – launches player (jump mechanics)
-14. **Teleport** – instant transport (GOTO)
-15. **Escalator** – directional conveyor (one-way data flow)
-16. **Rocket** – fast travel (optimized paths)
-17. **Wing** – flight over pits (privilege escalation)
-
-### Items & Inventory (8)
-18. **Coin** – goal object (return value)
-19. **Key** – unlocks doors (authentication)
-20. **Locked/Unlocked Door** – conditional passage (authorization)
-21. **Corn** – monster food (resource management)
-22. **Core** – monster weapon (resource as tool)
-23. **Drill** – wall destruction (privileged operation)
-24. **Hook** – pull to wall (shortcuts)
-25. **Bait** – monster distraction (exception handling)
-
-### Creatures & AI (7)
-26. **Patrol Monster** – moves on path (predictable behavior)
-27. **Chase Monster** – pursues player (reactive behavior)
-28. **Tameable Monster** – becomes ally when fed (state mutation)
-29. **Phased Monster** – semi-invisible (edge cases)
-30. **Zombie** – infects on contact (error propagation)
-31. **Boss Monster** – requires strategy (complex problem-solving)
-32. **Mama Hedgehog** – class definition (OOP)
-
-### Logic & Control (7)
-33. **Black Box (SISO/SIMO/MISO/MIMO)** – function abstraction
-34. **Lever** – toggle switch (boolean state)
-35. **Button** – momentary trigger (event handlers)
-36. **Timer** – delayed action (setTimeout)
-37. **Riddle** – conditional puzzle (logic gates)
-38. **Clock** – time-based event (CRON)
-39. **Sorter** – inventory organization (sorting algorithms)
-
-### Advanced / Hidden (6+)
-40. **Clone** – duplicate player (parallelism, fork)
-41. **Join** – merge clones (parallelism, join)
-42. **Ride** – mount tamed monster (composition)
-43. **Throw** – ranged attack (remote execution)
-44. **Scan** – reveal hidden objects (debugging)
-45. **Neuro-Stabilizer** – fuzzy logic (AI/ML)
-46+ **Backdoors** – hidden shortcuts (creative thinking)
+**Terrain:** Platform, Sky, Hole, Brick, Wall, Fake Wall, Ladder, Floating Platform, Magnet, Mirror, Sensor  
+**Transport:** Conveyor (4 dir), Spring, Teleport, Escalator, Rocket, Wing  
+**Items:** Coin, Key, Locked/Unlocked Door, Corn, Core, Drill, Hook, Bait  
+**Creatures:** Patrol, Chase, Tameable, Phased, Zombie, Boss, Mama Hedgehog  
+**Logic:** Black Box (SISO/SIMO/MISO/MIMO), Lever, Button, Timer, Riddle, Clock, Sorter  
+**Advanced:** Clone, Join, Ride, Throw, Scan, Neuro-Stabilizer, Backdoors  
 
 ---
 
@@ -188,107 +134,91 @@ Every level has **4 validated solutions** (precomputed by BFS):
 
 \* With Exploration Mode, black stars reduced by 1.
 
-### Star Calculation Formula
+---
 
-```python
-if exploration_used:
-    stars = min(2, 2 if steps <= optimal else 1)
-elif steps <= optimal:
-    stars = 3
-elif steps <= optimal * 1.5:
-    stars = 2
-else:
-    stars = 1
-
-🔍 Exploration Mode (P Key)
+## 🔍 Exploration Mode (P Key)
 
 Press P (or tap magnifying glass button) to enter free exploration.
 
-What you can do:
+**What you can do:**
+- Walk freely (arrows / swipe / tap)
+- Inspect items (marked "examined")
+- See monster patrol paths (frozen, semitransparent)
+- Read "Senior Engineer" notes on walls
+- Discover hidden objects (fake walls flicker)
 
-    Walk freely (arrows / swipe / tap)
+**What you cannot do:**
+- Collect coins (inactive, shows "Program me")
+- Complete the level
+- Die (pits/monsters just bounce you back)
 
-    Inspect items (marked "examined")
+**Cost:** Maximum 2 stars in this attempt.
 
-    See monster patrol paths (frozen, semitransparent)
+---
 
-    Read "Senior Engineer" notes on walls
+## 🏛 Technical Architecture
 
-    Discover hidden objects (fake walls flicker)
+### Technology Stack
 
-What you cannot do:
+| Layer | Technology | Version |
+|-------|------------|---------|
+| Game Engine | Phaser | 3.80+ |
+| Language | TypeScript (strict) | 5.0+ |
+| Build Tool | Vite | 5.0+ |
+| Mobile | Capacitor | 6.0+ |
+| Testing | Jest + ts-jest | 29.0+ |
+| PWA | Workbox | 7.0+ |
+| Level Generator | Node.js + TypeScript | 20.x |
+| Backend (Arcade) | Express + SQLite | - |
+| Container | Docker + Nginx | latest |
 
-    Collect coins (inactive, shows "Program me")
-
-    Complete the level
-
-    Die (pits/monsters just bounce you back)
-
-Cost: Maximum 2 stars in this attempt.
-Warning on first P press: "Your reward will be limited to 2 stars. Continue?"
-🏛 Technical Architecture
-Technology Stack
-Layer	Technology	Version
-Game Engine	Phaser	3.80+
-Language	TypeScript (strict)	5.0+
-Build Tool	Vite	5.0+
-Mobile	Capacitor	6.0+
-Testing	Jest + ts-jest	29.0+
-PWA	Workbox	7.0+
-Level Generator	Node.js + TypeScript	20.x
-Container	Docker + Nginx	latest
-Project Structure
-text
+### Project Structure
 
 cyberkid/
-├── src/
-│   ├── main.ts                 # Entry point
-│   ├── types/                  # TypeScript interfaces & enums
-│   ├── core/                   # EventBus
-│   ├── managers/               # Settings, Progress, Save, Level, Unlock
-│   ├── modules/                # Pathfinder, ExecutionEngine, CommandPanel, etc.
-│   ├── scenes/                 # All Phaser scenes
-│   └── data/                   # worlds.json, syntax.json
-├── tools/generator/            # Level generation CLI
-├── public/                     # Static assets & icons
-├── dist/                       # Build output
+├── src/ # Client source code
+│ ├── main.ts # Entry point
+│ ├── types/ # TypeScript interfaces & enums
+│ ├── core/ # EventBus
+│ ├── managers/ # Settings, Progress, Save, Level, Unlock
+│ ├── modules/ # Pathfinder, ExecutionEngine, CommandPanel, etc.
+│ ├── scenes/ # All Phaser scenes
+│ └── data/ # worlds.json, syntax.json
+├── tools/generator/ # Level generation CLI
+├── arcade-service/ # Backend for community levels
+├── public/ # Static assets & icons
+├── scripts/ # Utility scripts (manifest generator)
+├── dist/ # Build output
 ├── capacitor.config.ts
 ├── vite.config.ts
 ├── tsconfig.json
 ├── package.json
 ├── docker-compose.yml
 └── nginx.conf
+text
 
-Key Modules
 
-    EventBus – Central communication hub (singleton Phaser EventEmitter)
+### Key Modules (Implemented)
 
-    LevelManager – Dynamic level loading with caching (import.meta.glob)
+- **EventBus** – Central communication hub
+- **LevelManager** – Dynamic level loading via manifest (production-ready)
+- **ProgressManager** – Player progress (stars, achievements, world unlocks)
+- **SaveManager** – Multiple save slots, auto-save, session restore
+- **UnlockManager** – IAP integration (real Google Play / App Store billing)
+- **Pathfinder** – BFS engine supporting 45+ mechanics (including tools, doors, conveyors)
+- **ExecutionEngine** – Full command execution with functions, OOP, clones, parallelism
+- **CommandPanel** – Drag-and-drop visual programming UI (4 learning modes, nested blocks, parameters)
+- **HintSystem** – Timed contextual hints (tiers 1–5)
+- **ExplorationMode** – Ghost mode with monster freezing
+- **SandboxMaker** – Level editor with tile palette and object placement
 
-    ProgressManager – Player progress (stars, achievements, world unlocks)
+---
 
-    SaveManager – Multiple save slots, auto-save, session restore
-
-    UnlockManager – IAP integration (Google Play Billing simulation)
-
-    Pathfinder – BFS engine supporting 45+ mechanics
-
-    ExecutionEngine – Command execution state machine (loops, conditions, functions, OOP)
-
-    CommandPanel – Drag-and-drop visual programming UI (4 learning modes)
-
-    HintSystem – Timed contextual hints (tiers 1–5)
-
-    ExplorationMode – Ghost mode with monster freezing
-
-    SandboxMaker – Level editor with tile palette and object placement
-
-⚙️ Installation (Licensed Users Only)
+## ⚙️ Installation (Licensed Users Only)
 
 After obtaining a commercial license and access to private repository:
-bash
 
-# Clone repository (requires VPN + license key)
+```bash
+# Clone repository
 git clone https://github.com/[private]/cyberkid-core.git
 cd cyberkid-core
 
@@ -298,6 +228,9 @@ npm install
 # Configure license key
 cp .env.example .env
 # Add your key: LICENSE_KEY=xxxx-xxxx-xxxx-xxxx
+
+# Generate level manifest (required for production builds)
+npm run generate:manifest
 
 # Generate levels (for all worlds)
 npm run generate:levels -- --world meadow --count 500
@@ -317,6 +250,10 @@ npm run build
 npm run build:android
 npx cap open android
 
+# Build for iOS
+npm run build:ios
+npx cap open ios
+
 ⚠️ NOTE: The build will not run without a valid license key (cryptographic signature check).
 🧪 Testing
 bash
@@ -333,13 +270,15 @@ npm run test:coverage
 # - Lines: 70%
 # - Statements: 70%
 
-Test suites:
+Test suites cover:
 
-    managers/*.test.ts – Settings, Progress, Save, Level, Unlock
+    All managers (Settings, Progress, Save, Level, Unlock)
 
-    modules/*.test.ts – Pathfinder, ExecutionEngine, Player, LevelMap, CommandPanel, HintSystem, ExplorationMode
+    Core modules (Pathfinder, ExecutionEngine, Player, LevelMap, CommandPanel, HintSystem, ExplorationMode)
 
-    scenes/*.test.ts – MainMenu, WorldMap, LevelSelect, GameScene, VictoryScreen, Settings, Stats, Paywall, SandboxScene, ArcadeBrowser
+    All scenes (MainMenu, WorldMap, LevelSelect, GameScene, VictoryScreen, Settings, Stats, Paywall, SandboxScene, ArcadeBrowser)
+
+    Integration tests (full level flow)
 
 🚀 Deployment
 Web (Vercel / Netlify / static hosting)
@@ -366,7 +305,25 @@ bash
 npm run build:ios
 # Open ios/ folder in Xcode
 
-💰 Monetization
+Arcade Backend (optional, for level sharing)
+bash
+
+cd arcade-service
+npm install
+cp .env.example .env
+# Edit .env (change JWT_SECRET)
+npm run db:init
+npm run dev          # development
+npm run build        # build TypeScript
+npm start            # production
+
+Or using Docker:
+bash
+
+cd arcade-service
+docker-compose up -d
+
+💰 Monetization & IAP Integration
 
 CyberKid follows an ethical monetization model – never blocking learning.
 Free Content
@@ -391,17 +348,91 @@ Bonus World	$9.99	3000+ hidden levels
 Remove Ads	$4.99	No ads in menu screens
 Premium Monthly	$4.99	All worlds while active
 Premium Yearly	$39.99	All worlds while active
-Ethical Principles
+IAP Integration (Real)
 
-    No pay-to-win – Stars are earned, not bought
+The game integrates with:
 
-    No ads during learning – Ads only in menu screens
+    Google Play Billing (Android) via @cap-js/billing
 
-    No data selling – All progress stored locally
+    App Store (iOS) via StoreKit
 
-    No dark patterns – Clear pricing, no confusing UI
+Setup:
 
-    Subscription optional – One-time purchases also available
+    Install Capacitor Billing plugin: npm install @cap-js/billing
+
+    Configure products in Google Play Console / App Store Connect
+
+    Update UnlockManager with your SKUs
+
+    Test with sandbox accounts
+
+For detailed instructions, see docs/IAP_INTEGRATION.md.
+🎮 Arcade Backend (Community Levels)
+
+The Arcade service provides a full REST API for user-generated levels.
+Features
+
+    User registration / login (JWT authentication)
+
+    Publish levels (with server-side BFS validation)
+
+    List levels (featured, new, top rated, my levels)
+
+    Search by title and tags
+
+    Filter by difficulty
+
+    Like / unlike levels
+
+    Rate levels (1–5 stars)
+
+    Delete own levels
+
+API Endpoints
+Method	Endpoint	Description	Auth
+POST	/api/auth/register	Register user	no
+POST	/api/auth/login	Login	no
+POST	/api/levels	Publish level	yes
+GET	/api/levels	List levels	no
+GET	/api/levels/:id	Get level	no
+POST	/api/levels/:id/like	Like level	yes
+DELETE	/api/levels/:id/like	Unlike	yes
+POST	/api/levels/:id/rate	Rate level	yes
+GET	/api/my/levels	My levels	yes
+DELETE	/api/levels/:id	Delete level	yes
+Database
+
+SQLite (development) / can be migrated to PostgreSQL for production.
+🔧 Development Guide
+Building the Level Manifest
+
+For production builds, a manifest file (public/levels-manifest.json) is required. Generate it with:
+bash
+
+npm run generate:manifest
+
+This scans src/levels/**/*.json and creates the manifest used by LevelManager.
+Adding New Commands
+
+    Add command to Command enum in src/types/index.ts
+
+    Add metadata to COMMAND_METADATA in CommandPanel.ts
+
+    Implement execution logic in ExecutionEngine.ts
+
+    Add BFS support in Pathfinder.ts (if affects movement)
+
+    Write tests
+
+Adding New Worlds
+
+    Add world config to src/data/worlds.json
+
+    Add world-specific level generation config in tools/generator/config.ts
+
+    Generate levels: npm run generate:levels -- --world <id> --count <N>
+
+    Update LevelManager world order if needed
 
 📄 License
 
@@ -436,27 +467,55 @@ v1.0.0-beta (planned Q3 2026)
 
     All 6 worlds + Bonus
 
-    Arcade with UGC
+    Arcade with UGC + backend
 
     Sandbox Maker
 
+    Full OOP and functions support
+
+v0.6.0-alpha (current)
+
+    Complete IAP integration (real Google Play / App Store billing)
+
+    ExecutionEngine with functions, OOP, parallelism
+
+    Pathfinder with all tools (drill, hook, bait, wings)
+
+    Level manifest system (production-ready loading)
+
+    Arcade backend (Express + SQLite, full REST API)
+
+    Integration tests for full level flow
+
+    CommandPanel with parameters and nested blocks
+
+    Player with object method calls
+
 v0.5.0-alpha (Q1 2026)
 
-    All worlds (Meadow, Ocean, Clouds, Fairytale, Volcano, Bonus)
+    All worlds (Meadow through Bonus) with 500+ levels each
 
-    Level generator with BFS validation
+    Level generator CLI with BFS validation
 
-    Save system with multiple slots
+    Exploration Mode (P key)
 
-    Exploration Mode
+    Hint System (5 tiers)
+
+    Save slots (multiple profiles)
+
+    Export/import progress
+
+    Developer Mode (syntax view, event debug)
 
 v0.1.0-alpha (Q3 2025)
 
-    First playable prototype (Meadow only)
+    Initial prototype (Meadow world only)
 
-    Core mechanics (move, push, hole, brick)
+    Core mechanics: movement, pits, bricks, coins
 
-    Basic command panel
+    CommandPanel with drag-and-drop
+
+    ExecutionEngine (basic commands)
 
 ❓ FAQ
 
@@ -477,6 +536,9 @@ A: Planned for future release (classroom mode).
 
 Q: Does the game track personal data?
 A: No. All progress is stored locally. No accounts required.
+
+Q: How do I set up IAP for Android/iOS?
+A: See docs/IAP_INTEGRATION.md (provided with the source code).
 🔒 Privacy Policy
 
 The game does not collect personal data without explicit consent. Only stored data:
