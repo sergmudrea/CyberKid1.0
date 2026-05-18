@@ -1,40 +1,31 @@
-# Arcade Service (Post-MVP)
+# Arcade Service
 
 This directory contains the backend microservice for CyberKid Arcade – community level sharing.
 
-## Features (planned)
-- User authentication (optional)
-- Level publishing and rating
-- Daily featured packs
-- Level search and filtering
+## ✅ Реализованные возможности (Прометей)
 
-## Setup (future)
+> **ВНИМАНИЕ:** Ниже описан **реальный** функционал сервиса, код которого предоставлен в составе доработок. Ранее планировавшийся функционал (PostgreSQL, сложный рейтинг Elo и т.д.) заменён на работающую реализацию на SQLite с Express, JWT и BFS-валидацией.
+
+### Реализовано полностью
+
+- **Аутентификация** через JWT (регистрация / логин, bcrypt для хеширования паролей)
+- **Публикация уровней** с серверной валидацией (BFS проверяет решаемость уровня перед сохранением)
+- **Получение списков уровней** с пагинацией, сортировкой (`new`, `top`, `popular`), фильтрацией по сложности (`easy`, `medium`, `hard`), поиском по названию и тегам
+- **Получение одного уровня** (автоматически увеличивается счётчик просмотров)
+- **Лайки и отзывы (рейтинг 1–5)** с возможностью изменить оценку
+- **Личный кабинет автора** – список своих уровней, удаление своих уровней
+- **База данных** – SQLite (легковесная, не требует отдельного сервера), все таблицы создаются автоматически
+- **Rate limiting** – защита от чрезмерного количества запросов
+- **Готовый Docker-контейнер** (многоступенчатая сборка, healthcheck, volume для сохранения БД)
+
+## Быстрый старт
+
 ```bash
 cd arcade-service
 npm install
 cp .env.example .env
-npm run dev
-
-API Endpoints (planned)
-
-    POST /api/levels – publish a level
-
-    GET /api/levels/featured – get featured levels
-
-    GET /api/levels/search?q=... – search levels
-
-    POST /api/levels/:id/rate – rate a level
-
-    POST /api/levels/:id/play – increment play count
-
-Database (planned)
-
-PostgreSQL with tables:
-
-    users
-
-    levels
-
-    ratings
-
-    plays
+# отредактируйте .env (обязательно смените JWT_SECRET)
+npm run dev          # режим разработки
+npm run build        # сборка TypeScript
+npm start            # запуск production сервера
+npm run db:init      # инициализация БД (таблицы создаются автоматически при первом запуске)
