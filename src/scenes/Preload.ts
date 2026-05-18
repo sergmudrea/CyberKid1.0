@@ -112,6 +112,7 @@ export class Preload extends Scene {
     const width = this.cameras.main.width;
     const height = this.cameras.main.height;
 
+    // Фон
     const bg = this.add.rectangle(0, 0, width, height, 0x1a1a2e);
     bg.setOrigin(0, 0);
 
@@ -130,6 +131,7 @@ export class Preload extends Scene {
       repeat: -1,
     });
 
+    // Прогресс-бар
     this.progressBar = this.add.graphics();
     this.progressText = this.add.text(width / 2, height / 2 + 50, '0%', {
       fontFamily: 'Arial, sans-serif',
@@ -179,6 +181,7 @@ export class Preload extends Scene {
         'Create your own levels in Sandbox Maker and share with friends!',
       ];
     }
+    // Перемешиваем
     for (let i = this.tips.length - 1; i > 0; i--) {
       const j = Math.floor(Math.random() * (i + 1));
       [this.tips[i], this.tips[j]] = [this.tips[j], this.tips[i]];
@@ -197,18 +200,16 @@ export class Preload extends Scene {
     const height = this.cameras.main.height;
     const percent = Math.floor(value * 100);
 
+    if (!this.progressBar) return;
     this.progressBar.clear();
     this.progressBar.fillStyle(0x00ffcc, 1);
     this.progressBar.fillRect(width / 2 - 200, height / 2, 400 * value, 20);
-    this.progressText.setText(`${percent}%`);
+    if (this.progressText) this.progressText.setText(`${percent}%`);
   }
 
   private async initManagers(): Promise<void> {
-    // Менеджеры-синглтоны уже проинициализированы при создании,
-    // но LevelManager требует асинхронного сканирования уровней
     await levelManager.initialize();
     await unlockManager.initialize();
-    // Остальные менеджеры не требуют await
   }
 
   private loadComplete(): void {
@@ -230,7 +231,6 @@ export class Preload extends Scene {
       textureManager.addImage(key, canvas);
     };
 
-    // Плейсхолдеры тайлов
     ensureTexture('tile_platform', (ctx, w, h) => {
       ctx.fillStyle = '#8B5A2B';
       ctx.fillRect(0, 0, w, h);
@@ -274,7 +274,6 @@ export class Preload extends Scene {
       ctx.fillRect(w/4, h/4, w/2, h/2);
     });
 
-    // Спрайт-лист игрока: создаём несколько кадров для анимации
     if (!textureManager.exists('player')) {
       const frameCount = 12;
       const frameW = 32, frameH = 32;
@@ -289,7 +288,6 @@ export class Preload extends Scene {
       textureManager.addSpriteSheet('player', canvas, { frameWidth: frameW, frameHeight: frameH });
     }
 
-    // UI кнопки
     ensureTexture('ui_button_run', (ctx, w, h) => {
       ctx.fillStyle = '#00AA00';
       ctx.fillRect(0, 0, w, h);
@@ -301,11 +299,9 @@ export class Preload extends Scene {
       ctx.fillRect(0, 0, w, h);
     });
 
-    // Звуки-заглушки, если файлы отсутствуют
     const soundKeys = ['move', 'coin', 'victory', 'death', 'click', 'music_menu', 'music_meadow', 'music_ocean', 'music_clouds', 'music_fairytale', 'music_volcano'];
     for (const key of soundKeys) {
       if (!this.cache.audio.exists(key)) {
-        // Добавляем пустой звук (тишина)
         this.sound.add(key, { volume: 0 });
       }
     }
@@ -313,7 +309,6 @@ export class Preload extends Scene {
 
   private initPlayerAnimations(): void {
     const anims = this.anims;
-    // Проверяем, что спрайт-лист имеет хотя бы 2 кадра
     if (!this.textures.exists('player')) return;
     const frameTotal = this.textures.get('player').frameTotal;
     if (frameTotal < 4) return;
@@ -349,7 +344,6 @@ export class Preload extends Scene {
     const style = document.createElement('style');
     style.id = 'cyberkid-styles';
     style.textContent = `
-      /* Command Panel */
       .command-panel {
         position: fixed;
         bottom: 20px;
