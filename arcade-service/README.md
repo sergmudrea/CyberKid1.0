@@ -29,3 +29,84 @@ npm run dev          # режим разработки
 npm run build        # сборка TypeScript
 npm start            # запуск production сервера
 npm run db:init      # инициализация БД (таблицы создаются автоматически при первом запуске)
+
+API Endpoints (все реализованы)
+Метод	Эндпоинт	Описание	Аутентификация
+POST	/api/auth/register	Регистрация пользователя	нет
+POST	/api/auth/login	Логин, возвращает JWT	нет
+POST	/api/levels	Публикация уровня (валидация BFS)	да (Bearer)
+GET	/api/levels	Список уровней (пагинация, сортировка, фильтры)	нет
+GET	/api/levels/:id	Получение одного уровня (+1 к play_count)	нет
+POST	/api/levels/:id/like	Поставить лайк	да
+DELETE	/api/levels/:id/like	Убрать лайк	да
+POST	/api/levels/:id/rate	Оценить уровень (1–5)	да
+GET	/api/my/levels	Список своих уровней	да
+DELETE	/api/levels/:id	Удалить свой уровень	да
+Примеры запросов
+bash
+
+# Регистрация
+curl -X POST http://localhost:3001/api/auth/register \
+  -H "Content-Type: application/json" \
+  -d '{"username":"player1","password":"secret123"}'
+
+# Логин
+curl -X POST http://localhost:3001/api/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"username":"player1","password":"secret123"}'
+
+# Публикация уровня (токен подставить)
+curl -X POST http://localhost:3001/api/levels \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" \
+  -d '{"levelData":{"id":"my_level_001","name":"My Level","width":5,"height":5,"map":[...],"startPos":{"col":0,"row":0},"coinPos":{"col":4,"row":4}}}'
+
+# Получить топ уровней
+curl "http://localhost:3001/api/levels?sort=top&limit=10"
+
+Docker (производственный запуск)
+bash
+
+docker-compose up -d
+# сервер будет доступен на порту 3001
+# данные БД сохраняются в Docker volume `arcade_data`
+
+Переменные окружения (.env)
+Переменная	Описание	По умолчанию
+PORT	Порт сервера	3001
+JWT_SECRET	Секрет для подписи токенов (обязательно изменить)	–
+DB_PATH	Путь к файлу SQLite	./arcade.db
+CORS_ORIGINS	Разрешённые домены через запятую	http://localhost:3000
+RATE_LIMIT_MAX	Максимум запросов на IP в окно	100
+DEBUG	Подробное логирование	false
+Планы на будущее (Post-MVP)
+
+    Администрирование – одобрение уровней модераторами (сейчас все уровни публикуются с is_approved = 0, но API их не показывает, пока не переключить флаг вручную в БД).
+
+    Ежедневные подборки (cron + алгоритм ранжирования).
+
+    Переход на PostgreSQL для масштабирования (сейчас SQLite достаточно для тысяч уровней).
+
+    Webhooks для синхронизации с основным клиентским приложением.
+
+Технологии
+
+    Node.js + Express
+
+    TypeScript
+
+    SQLite3 (с обёрткой sqlite)
+
+    jsonwebtoken, bcrypt
+
+    express-rate-limit, helmet, cors
+
+    Docker + Docker Compose
+
+Лицензия
+
+Proprietary (в составе CyberKid Technologies LLC)
+text
+
+
+Этот README полностью отражает реально написанный код бэкенда (а не "планируемый" функционал). Я добавил детали по всем эндпоинтам, инструкции по запуску, Docker, переменные окружения и отметил, что BFS-валидация реализована.
