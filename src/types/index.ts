@@ -1,6 +1,6 @@
 // src/types/index.ts
-// Эйдо: Полное ядро типов CyberKid согласно ТЗ и arch.txt.
-// Содержит 45+ команд, 40+ тайлов, все интерфейсы для механик.
+// ПРОМЕТЕЙ: Полное ядро типов CyberKid согласно ТЗ и arch.txt.
+// Содержит 45+ команд, 40+ тайлов, интерфейсы для механик, поддержку функций, классов, клонов.
 
 // ------------------------------ 1. КОМАНДЫ (45+) ------------------------------
 export enum Command {
@@ -70,7 +70,7 @@ export enum Command {
   END = 'END'
 }
 
-// ------------------------------ 2. ТИПЫ ТАЙЛОВ (40+, без дублирования COIN) ------------------------------
+// ------------------------------ 2. ТИПЫ ТАЙЛОВ (40+) ------------------------------
 export enum TileType {
   PLATFORM = 0,
   SKY = 1,
@@ -79,7 +79,7 @@ export enum TileType {
   WALL = 4,
   FAKE_WALL = 5,
   LADDER = 6,
-  GOAL = 7,          // монета (цель)
+  GOAL = 7,
   START = 8,
   KEY = 10,
   DOOR_LOCKED = 11,
@@ -174,12 +174,48 @@ export interface Sorter {
   order: 'asc' | 'desc' | 'fifo' | 'lifo';
 }
 
+export interface Bridge {
+  id: string;
+  position: Point;
+  active: boolean;
+  buttonId?: string;
+}
+
+export interface Door {
+  id: string;
+  position: Point;
+  isLocked: boolean;
+  keyId?: string;
+}
+
+export interface Lever {
+  id: string;
+  position: Point;
+  state: boolean;
+}
+
+export interface Sensor {
+  position: Point;
+  range: number;
+}
+
+export interface Timer {
+  position: Point;
+  delay: number;
+  active: boolean;
+}
+
+export interface Rocket {
+  entry: Point;
+  exit: Point;
+}
+
 export interface LevelObjects {
   holes: Point[];
   walls: Point[];
   bricks: Point[];
   keys: Point[];
-  doors: { id: string; position: Point; isLocked: boolean; keyId?: string }[];
+  doors: Door[];
   monsters: Monster[];
   teleports: TeleportPair[];
   conveyors: Conveyor[];
@@ -187,20 +223,20 @@ export interface LevelObjects {
   blackBoxes: BlackBox[];
   sorters: Sorter[];
   buttons: Point[];
-  levers: { id: string; position: Point; state: boolean }[];
-  sensors: { position: Point; range: number }[];
-  timers: { position: Point; delay: number; active: boolean }[];
+  levers: Lever[];
+  sensors: Sensor[];
+  timers: Timer[];
   corn: Point[];
   cores: Point[];
   drills: Point[];
   hooks: Point[];
   wings: Point[];
   baits: Point[];
-  rockets: { entry: Point; exit: Point }[];
+  rockets: Rocket[];
   mirrors: Point[];
   clonePoints: Point[];
   ridePoints: Point[];
-  bridges: { id: string; position: Point; active: boolean; buttonId?: string }[];
+  bridges: Bridge[];
   lava: Point[];
   water: Point[];
   fakeWalls: Point[];
@@ -247,25 +283,6 @@ export interface Inventory {
 }
 
 // ------------------------------ 6. ПРОГРЕСС ИГРОКА ------------------------------
-export interface PlayerProgress {
-  totalStars: number;
-  totalBlackStars: number;
-  levelsCompleted: string[];
-  perfectLevels: string[];
-  levelStats: Record<string, LevelStats>;
-  totalAttempts: number;
-  totalDeaths: number;
-  deathsByType: Record<string, number>;
-  totalPlayTimeSec: number;
-  explorationUsedCount: number;
-  backdoorsFound: number;
-  unlockedWorlds: string[];
-  lastPlayedWorld: string;
-  lastPlayedLevelId: string;
-  achievements: Achievement[];
-  settings: UserSettings;
-}
-
 export interface LevelStats {
   stars: number;
   blackStar: boolean;
@@ -284,6 +301,25 @@ export interface Achievement {
   unlocked: boolean;
   unlockedAt?: number;
   progress?: number;
+}
+
+export interface PlayerProgress {
+  totalStars: number;
+  totalBlackStars: number;
+  levelsCompleted: string[];
+  perfectLevels: string[];
+  levelStats: Record<string, LevelStats>;
+  totalAttempts: number;
+  totalDeaths: number;
+  deathsByType: Record<string, number>;
+  totalPlayTimeSec: number;
+  explorationUsedCount: number;
+  backdoorsFound: number;
+  unlockedWorlds: string[];
+  lastPlayedWorld: string;
+  lastPlayedLevelId: string;
+  achievements: Achievement[];
+  settings: UserSettings;
 }
 
 // ------------------------------ 7. НАСТРОЙКИ ПОЛЬЗОВАТЕЛЯ ------------------------------
@@ -323,24 +359,14 @@ export interface PathResult {
   fellIntoLava: boolean;
   drowned: boolean;
   explorationUsed: boolean;
-  backdoorFound: boolean;   // добавлено
+  backdoorFound: boolean;
 }
 
-// ------------------------------ 9. СТАТУС ВЫПОЛНЕНИЯ ------------------------------
-export interface ExecutionStatus {
-  state: 'idle' | 'running' | 'paused' | 'finished' | 'error' | 'waiting';
-  currentCommandIndex: number;
-  totalCommands: number;
-  cycleCount: number;
-  lastError?: string;
-  callStack: CallFrame[];
-  clones: CloneInfo[];
-}
-
+// ------------------------------ 9. СТАТУС ВЫПОЛНЕНИЯ (ExecutionEngine) ------------------------------
 export interface CallFrame {
   functionName: string;
   returnAddress: number;
-  localVars: Record<string, any>;
+  localVars: Map<string, any>;
 }
 
 export interface CloneInfo {
@@ -349,6 +375,16 @@ export interface CloneInfo {
   inventory: Inventory;
   commands: Command[];
   currentIndex: number;
+}
+
+export interface ExecutionStatus {
+  state: 'idle' | 'running' | 'paused' | 'finished' | 'error' | 'waiting';
+  currentCommandIndex: number;
+  totalCommands: number;
+  cycleCount: number;
+  lastError?: string;
+  callStack: CallFrame[];
+  clones: CloneInfo[];
 }
 
 // ------------------------------ 10. МИРЫ И КОНФИГУРАЦИЯ ------------------------------
@@ -425,6 +461,11 @@ export type GameEvent =
   | { type: 'INVENTORY_CHANGED'; payload: { inventory: Inventory } }
   | { type: 'MONSTER_TAMED'; payload: { monsterId: string } }
   | { type: 'CLONE_CREATED'; payload: { cloneId: string; pos: Point } }
+  | { type: 'CLONE_MOVED'; payload: { cloneId: string; pos: Point } }
+  | { type: 'CLONES_JOINED' }
+  | { type: 'OBJECT_CREATED'; payload: { className: string; objectId: string } }
+  | { type: 'OBJECT_COLLECTED'; payload: { objectId: string } }
+  | { type: 'OBJECT_DROPPED'; payload: { objectId: string; pos: Point } }
   | { type: 'HINT_SHOWN'; payload: { hintText: string; tier: number } }
   | { type: 'SETTINGS_CHANGED'; payload: UserSettings }
   | { type: 'PROGRESS_UPDATED'; payload: PlayerProgress }
