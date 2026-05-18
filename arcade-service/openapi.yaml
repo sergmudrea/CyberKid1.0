@@ -1,0 +1,482 @@
+# arcade-service/openapi.yaml
+# ПРОМЕТЕЙ: OpenAPI 3.0 спецификация для Arcade API.
+# Используйте для генерации клиентского SDK, документации или тестирования.
+
+openapi: 3.0.0
+info:
+  title: CyberKid Arcade API
+  description: Backend API для публикации, поиска и рейтинга пользовательских уровней.
+  version: 1.0.0
+  contact:
+    name: CyberKid Technologies LLC
+    email: schkyola@gmail.com
+  license:
+    name: Proprietary
+    url: https://cyberkid.game/license
+
+servers:
+  - url: http://localhost:3001/api
+    description: Development server
+  - url: https://arcade.cyberkid.game/api
+    description: Production server
+
+tags:
+  - name: auth
+    description: Регистрация и аутентификация
+  - name: levels
+    description: Управление уровнями
+  - name: interactions
+    description: Лайки и рейтинг
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  schemas:
+    User:
+      type: object
+      properties:
+        id:
+          type: integer
+          example: 1
+        username:
+          type: string
+          example: "player1"
+        email:
+          type: string
+          nullable: true
+          example: "player1@example.com"
+        created_at:
+          type: integer
+          description: Unix timestamp
+          example: 1700000000
+
+    LevelMetadata:
+      type: object
+      properties:
+        id:
+          type: string
+          example: "user_1700000000_abc123"
+        title:
+          type: string
+          example: "My Awesome Level"
+        author_name:
+          type: string
+          example: "player1"
+        created_at:
+          type: integer
+          example: 1700000000
+        play_count:
+          type: integer
+          example: 42
+        like_count:
+          type: integer
+          example: 7
+        difficulty:
+          type: string
+          enum: [easy, medium, hard]
+        rating:
+          type: number
+          format: float
+          nullable: true
+          example: 4.5
+
+    LevelFull:
+      allOf:
+        - $ref: '#/components/schemas/LevelMetadata'
+        - type: object
+          properties:
+            level_data:
+              type: object
+              description: Полный объект LevelData (с картой, объектами и т.д.)
+              example: { "width": 5, "height": 5, "map": [...], "startPos": {...}, "coinPos": {...} }
+
+    PublishLevelRequest:
+      type: object
+      required:
+        - levelData
+      properties:
+        levelData:
+          type: object
+          description: LevelData в формате игры
+          example: { "id": "my_level_001", "name": "My Level", "width": 5, "height": 5, "map": [...], "startPos": {...}, "coinPos": {...} }
+
+    RateLevelRequest:
+      type: object
+      required:
+        - rating
+      properties:
+        rating:
+          type: integer
+          minimum: 1
+          maximum: 5
+          example: 5
+
+    AuthRequest:
+      type: object
+      required:
+        - username
+        - password
+      properties:
+        username:
+          type: string
+          example: "player1"
+        password:
+          type: string
+          format: password
+          example: "secret123"
+        email:
+          type: string
+          format: email
+          nullable: true
+          example: "player1@example.com"
+
+    AuthResponse:
+      type: object
+      properties:
+        token:
+          type: string
+          example: "eyJhbGciOiJIUzI1NiIs..."
+        user:
+          $ref: '#/components/schemas/User'
+
+    Pagination:
+      type: object
+      properties:
+        page:
+          type: integer
+          example: 1
+        limit:
+          type: integer
+          example: 12
+        total:
+          type: integer
+          example: 150
+
+    LevelsListResponse:
+      type: object
+      properties:
+        levels:
+          type: array
+          items:
+            $ref: '#/components/schemas/LevelMetadata'
+        pagination:
+          $ref: '#/components/schemas/Pagination'
+
+    ErrorResponse:
+      type: object
+      properties:
+        error:
+          type: string
+          example: "Invalid credentials"
+
+  parameters:
+    pageParam:
+      name: page
+      in: query
+      schema:
+        type: integer
+        minimum: 1
+        default: 1
+      description: Номер страницы
+    limitParam:
+      name: limit
+      in: query
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 50
+        default: 12
+      description: Количество уровней на странице
+    sortParam:
+      name: sort
+      in: query
+      schema:
+        type: string
+        enum: [new, top, popular]
+        default: new
+      description: Сортировка
+    difficultyParam:
+      name: difficulty
+      in: query
+      schema:
+        type: string
+        enum: [easy, medium, hard]
+      description: Фильтр по сложности
+    searchParam:
+      name: search
+      in: query
+      schema:
+        type: string
+      description: Поиск по названию уровня
+    tagsParam:
+      name: tags
+      in: query
+      schema:
+        type: string
+      description: Фильтр по тегам (через запятую)
+
+paths:
+  # ----- Аутентификация -----
+  /auth/register:
+    post:
+      tags: [auth]
+      summary: Регистрация нового пользователя
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AuthRequest'
+      responses:
+        '200':
+          description: Успешная регистрация
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthResponse'
+        '409':
+          description: Имя пользователя уже существует
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /auth/login:
+    post:
+      tags: [auth]
+      summary: Вход в систему
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AuthRequest'
+      responses:
+        '200':
+          description: Успешный вход
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthResponse'
+        '401':
+          description: Неверные учётные данные
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  # ----- Уровни (публичные) -----
+  /levels:
+    get:
+      tags: [levels]
+      summary: Получить список уровней с фильтрацией и пагинацией
+      parameters:
+        - $ref: '#/components/parameters/pageParam'
+        - $ref: '#/components/parameters/limitParam'
+        - $ref: '#/components/parameters/sortParam'
+        - $ref: '#/components/parameters/difficultyParam'
+        - $ref: '#/components/parameters/searchParam'
+        - $ref: '#/components/parameters/tagsParam'
+      responses:
+        '200':
+          description: Успешно
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LevelsListResponse'
+
+    post:
+      tags: [levels]
+      summary: Публикация нового уровня
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PublishLevelRequest'
+      responses:
+        '200':
+          description: Уровень опубликован
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  levelId:
+                    type: string
+        '400':
+          description: Невалидные данные уровня (BFS не прошёл)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Не авторизован
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /levels/{id}:
+    get:
+      tags: [levels]
+      summary: Получить полный уровень по ID
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Успешно
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  level:
+                    $ref: '#/components/schemas/LevelFull'
+        '404':
+          description: Уровень не найден
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+    delete:
+      tags: [levels]
+      summary: Удалить свой уровень
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Уровень удалён
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+        '403':
+          description: Нельзя удалить чужой уровень
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Уровень не найден
+
+  # ----- Лайки и рейтинг -----
+  /levels/{id}/like:
+    post:
+      tags: [interactions]
+      summary: Поставить лайк уровню
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Лайк поставлен
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+        '409':
+          description: Уже лайкнуто
+
+    delete:
+      tags: [interactions]
+      summary: Убрать лайк
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Лайк убран
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+
+  /levels/{id}/rate:
+    post:
+      tags: [interactions]
+      summary: Оценить уровень (1–5)
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RateLevelRequest'
+      responses:
+        '200':
+          description: Оценка сохранена
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+        '400':
+          description: Некорректная оценка
+
+  # ----- Личные уровни -----
+  /my/levels:
+    get:
+      tags: [levels]
+      summary: Получить список своих уровней
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/pageParam'
+        - $ref: '#/components/parameters/limitParam'
+      responses:
+        '200':
+          description: Успешно
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LevelsListResponse'
+        '401':
+          description: Не авторизован
