@@ -1,0 +1,39 @@
+# arcade-service/docker-compose.yml
+# ПРОМЕТЕЙ: Оркестрация Arcade сервера с использованием Docker Compose.
+# Упрощает запуск в development и production окружениях.
+
+version: '3.8'
+
+services:
+  arcade:
+    build: .
+    container_name: cyberkid-arcade
+    restart: unless-stopped
+    ports:
+      - "3001:3001"
+    environment:
+      - NODE_ENV=production
+      - PORT=3001
+      - JWT_SECRET=${JWT_SECRET:-change-this-secret-in-production}
+      - DB_PATH=/app/data/arcade.db
+      - CORS_ORIGINS=${CORS_ORIGINS:-http://localhost:3000}
+      - RATE_LIMIT_MAX=100
+      - DEBUG=false
+    volumes:
+      - arcade_data:/app/data
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('http').get('http://localhost:3001/api/levels?limit=1', (r) => {process.exit(r.statusCode === 200 ? 0 : 1)})"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+      start_period: 5s
+    networks:
+      - arcade-network
+
+volumes:
+  arcade_data:
+    driver: local
+
+networks:
+  arcade-network:
+    driver: bridge
