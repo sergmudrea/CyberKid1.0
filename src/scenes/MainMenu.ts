@@ -1,4 +1,4 @@
-/ src/scenes/MainMenu.ts
+// src/scenes/MainMenu.ts
 // Главное меню игры
 
 import { Scene } from 'phaser';
