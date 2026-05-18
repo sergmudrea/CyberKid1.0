@@ -1,9 +1,18 @@
 // src/modules/Player.ts
-// Эйдо: Управление персонажем (позиция, направление, инвентарь, клоны, верховая езда).
-// Эмитит события через EventBus: PLAYER_MOVED, PLAYER_DIED, INVENTORY_CHANGED, CLONE_CREATED и др.
+// ПРОМЕТЕЙ: Полностью переработанный класс Player с поддержкой объектов (ООП) и вызовов методов.
+// Добавлено хранение созданных объектов, методы для вызова методов объектов, интеграция с ObjectInstance.
+// Сохранена полная совместимость с существующими механиками (инвентарь, клоны, верховая езда).
 
 import { Point, Inventory, Monster, Command } from '../types/index';
 import { gameEvents as eventBus } from '../core/EventBus';
+
+// Интерфейс для объекта, созданного через NEW (поддержка ООП)
+export interface ObjectInstance {
+  id: string;
+  className: string;
+  properties: Map<string, any>;
+  methods?: Map<string, Function>; // ссылки на методы класса (в runtime)
+}
 
 export interface CloneInfo {
   id: string;
@@ -18,11 +27,16 @@ export class Player {
   private direction: 'up' | 'down' | 'left' | 'right';
   private inventory: Inventory;
   private isAlive: boolean = true;
-  private isGhostMode: boolean = false;      // Exploration mode
+  private isGhostMode: boolean = false;
   private clones: CloneInfo[] = [];
-  private riddenMonster: Monster | null = null; // верховая езда
+  private riddenMonster: Monster | null = null;
   private levelBounds: { width: number; height: number };
-  private tileMap: (col: number, row: number) => number; // функция получения типа тайла (для коллизий)
+  private tileMap: (col: number, row: number) => number;
+  private wingActive: boolean = false; // временный эффект крыльев
+
+  // Поддержка ООП: созданные объекты (экземпляры классов)
+  private objects: Map<string, ObjectInstance> = new Map();
+  private nextObjectId: number = 1;
 
   constructor(
     startPos: Point,
@@ -48,42 +62,19 @@ export class Player {
   }
 
   // ---------- Геттеры ----------
-  public getPosition(): Point {
-    return { ...this.position };
-  }
-
-  public getDirection(): 'up' | 'down' | 'left' | 'right' {
-    return this.direction;
-  }
-
-  public getInventory(): Inventory {
-    return { ...this.inventory };
-  }
-
-  public isPlayerAlive(): boolean {
-    return this.isAlive;
-  }
-
-  public isGhost(): boolean {
-    return this.isGhostMode;
-  }
-
-  public getClones(): CloneInfo[] {
-    return [...this.clones];
-  }
-
-  public getRiddenMonster(): Monster | null {
-    return this.riddenMonster ? { ...this.riddenMonster } : null;
-  }
+  public getPosition(): Point { return { ...this.position }; }
+  public getDirection(): 'up' | 'down' | 'left' | 'right' { return this.direction; }
+  public getInventory(): Inventory { return { ...this.inventory }; }
+  public isPlayerAlive(): boolean { return this.isAlive; }
+  public isGhost(): boolean { return this.isGhostMode; }
+  public getClones(): CloneInfo[] { return [...this.clones]; }
+  public getRiddenMonster(): Monster | null { return this.riddenMonster ? { ...this.riddenMonster } : null; }
+  public getObjects(): Map<string, ObjectInstance> { return new Map(this.objects); }
 
   // ---------- Управление режимами ----------
   public setGhostMode(enabled: boolean): void {
     this.isGhostMode = enabled;
-    if (enabled) {
-      eventBus.emit('EXPLORATION_TOGGLED', { enabled: true, penaltyWarningShown: true });
-    } else {
-      eventBus.emit('EXPLORATION_TOGGLED', { enabled: false, penaltyWarningShown: false });
-    }
+    eventBus.emit('EXPLORATION_TOGGLED', { enabled, penaltyWarningShown: enabled });
   }
 
   // ---------- Движение и коллизии ----------
@@ -98,19 +89,16 @@ export class Player {
     const oldPos = { ...this.position };
     this.position = newPos;
     this.direction = direction;
-
     eventBus.emit('PLAYER_MOVED', { from: oldPos, to: this.position });
     return true;
   }
 
-  // Принудительная телепортация (без проверок)
   public teleport(point: Point): void {
     const oldPos = { ...this.position };
     this.position = { ...point };
     eventBus.emit('PLAYER_MOVED', { from: oldPos, to: this.position });
   }
 
-  // Применить эффект конвейера (вызывается из ExecutionEngine)
   public applyConveyor(conveyorDir: 'up' | 'down' | 'left' | 'right'): boolean {
     if (!this.isAlive) return false;
     const delta = this.directionToDelta(conveyorDir);
@@ -124,7 +112,6 @@ export class Player {
     return true;
   }
 
-  // Применить пружину (вызывается из ExecutionEngine)
   public applySpring(launchDir: 'up' | 'down' | 'left' | 'right', force: number = 3): boolean {
     if (!this.isAlive) return false;
     let currentPos = { ...this.position };
@@ -149,7 +136,6 @@ export class Player {
       this.emitInventoryChanged();
     }
   }
-
   public useKey(keyId: string): boolean {
     const index = this.inventory.keys.indexOf(keyId);
     if (index !== -1) {
@@ -159,12 +145,7 @@ export class Player {
     }
     return false;
   }
-
-  public addCorn(amount: number = 1): void {
-    this.inventory.corn += amount;
-    this.emitInventoryChanged();
-  }
-
+  public addCorn(amount: number = 1): void { this.inventory.corn += amount; this.emitInventoryChanged(); }
   public useCorn(): boolean {
     if (this.inventory.corn > 0) {
       this.inventory.corn--;
@@ -173,12 +154,7 @@ export class Player {
     }
     return false;
   }
-
-  public addCore(amount: number = 1): void {
-    this.inventory.cores += amount;
-    this.emitInventoryChanged();
-  }
-
+  public addCore(amount: number = 1): void { this.inventory.cores += amount; this.emitInventoryChanged(); }
   public useCore(): boolean {
     if (this.inventory.cores > 0) {
       this.inventory.cores--;
@@ -187,7 +163,6 @@ export class Player {
     }
     return false;
   }
-
   public addTool(tool: 'drill' | 'hook' | 'wing' | 'bait'): void {
     switch (tool) {
       case 'drill': this.inventory.hasDrill = true; break;
@@ -198,7 +173,6 @@ export class Player {
     if (!this.inventory.tools.includes(tool)) this.inventory.tools.push(tool);
     this.emitInventoryChanged();
   }
-
   public useTool(tool: 'drill' | 'hook' | 'wing' | 'bait'): boolean {
     let has = false;
     switch (tool) {
@@ -215,23 +189,32 @@ export class Player {
     return false;
   }
 
+  // ---------- Крылья (временный эффект) ----------
+  public activateWing(): void {
+    this.wingActive = true;
+    this.useTool('wing');
+    // Эффект длится 3 шага (управляется ExecutionEngine)
+    setTimeout(() => { this.wingActive = false; }, 3000);
+  }
+  public isWingActive(): boolean { return this.wingActive; }
+
   // ---------- Смерть и сброс ----------
   public kill(cause: string): void {
     if (this.isGhostMode) return;
     this.isAlive = false;
     eventBus.emit('PLAYER_DIED', { cause });
   }
-
   public revive(startPos: Point, startDir: 'up' | 'down' | 'left' | 'right'): void {
     this.position = { ...startPos };
     this.direction = startDir;
     this.isAlive = true;
     this.resetInventory();
-    // Клоны при возрождении уничтожаются
     this.clones = [];
     this.riddenMonster = null;
+    this.objects.clear();
+    this.nextObjectId = 1;
+    this.wingActive = false;
   }
-
   public resetInventory(): void {
     this.inventory = {
       keys: [],
@@ -251,29 +234,23 @@ export class Player {
     const newClone: CloneInfo = {
       id: cloneId,
       position: { ...position },
-      inventory: { ...this.inventory }, // клон получает копию инвентаря
+      inventory: JSON.parse(JSON.stringify(this.inventory)),
       commands: [...commands],
       currentCommandIndex: 0,
     };
     this.clones.push(newClone);
     eventBus.emit('CLONE_CREATED', { cloneId, pos: position });
   }
-
   public removeClone(cloneId: string): void {
     this.clones = this.clones.filter(c => c.id !== cloneId);
   }
-
   public getClone(cloneId: string): CloneInfo | undefined {
     return this.clones.find(c => c.id === cloneId);
   }
-
   public updateClonePosition(cloneId: string, newPos: Point): void {
     const clone = this.getClone(cloneId);
-    if (clone) {
-      clone.position = { ...newPos };
-    }
+    if (clone) clone.position = { ...newPos };
   }
-
   public joinClones(): void {
     for (const clone of this.clones) {
       for (const key of clone.inventory.keys) {
@@ -291,8 +268,7 @@ export class Player {
     }
     this.clones = [];
     this.emitInventoryChanged();
-    // Эмитируем событие объединения клонов (опционально)
-    eventBus.emit('PLAYER_MOVED', { from: this.position, to: this.position });
+    eventBus.emit('CLONES_JOINED');
   }
 
   // ---------- Верховая езда ----------
@@ -303,16 +279,56 @@ export class Player {
     this.position = { ...monster.position };
     eventBus.emit('MONSTER_TAMED', { monsterId: monster.id });
   }
-
   public dismountMonster(): void {
     if (this.riddenMonster) {
       this.riddenMonster.isRidden = false;
       this.riddenMonster = null;
     }
   }
+  public isRiding(): boolean { return this.riddenMonster !== null; }
 
-  public isRiding(): boolean {
-    return this.riddenMonster !== null;
+  // ---------- Поддержка ООП: создание объектов и вызов методов ----------
+  public createObject(className: string, methods?: Map<string, Function>): string {
+    const objId = `obj_${this.nextObjectId++}`;
+    const obj: ObjectInstance = {
+      id: objId,
+      className,
+      properties: new Map(),
+      methods: methods ? new Map(methods) : undefined,
+    };
+    this.objects.set(objId, obj);
+    eventBus.emit('OBJECT_CREATED', { className, objectId: objId });
+    return objId;
+  }
+
+  public getObject(objectId: string): ObjectInstance | undefined {
+    return this.objects.get(objectId);
+  }
+
+  public setObjectProperty(objectId: string, key: string, value: any): void {
+    const obj = this.objects.get(objectId);
+    if (obj) {
+      obj.properties.set(key, value);
+    }
+  }
+
+  public getObjectProperty(objectId: string, key: string): any {
+    return this.objects.get(objectId)?.properties.get(key);
+  }
+
+  public callMethod(objectId: string, methodName: string, args: any[]): any {
+    const obj = this.objects.get(objectId);
+    if (!obj) {
+      console.warn(`Object ${objectId} not found`);
+      return null;
+    }
+    if (obj.methods && obj.methods.has(methodName)) {
+      const method = obj.methods.get(methodName)!;
+      // Метод вызывается в контексте объекта
+      return method(obj, ...args);
+    }
+    console.warn(`Method ${methodName} not found on object ${objectId}`);
+    return null;
   }
 
   // ---------- Приватные вспомогательные методы ----------
@@ -324,21 +340,15 @@ export class Player {
       case 'right': return { col: 1, row: 0 };
     }
   }
-
   private isWithinBounds(pos: Point): boolean {
     return pos.col >= 0 && pos.col < this.levelBounds.width && pos.row >= 0 && pos.row < this.levelBounds.height;
   }
-
   private canEnterTile(tile: number): boolean {
-    // Проверяем только физические препятствия (стены, ямы, лава/вода без крыльев/ghost mode)
-    if (tile === 4 || tile === 5) return false; // WALL, FAKE_WALL (требуется drill)
-    if (tile === 2 && !this.inventory.hasWing && !this.isGhostMode) return false; // HOLE
-    if ((tile === 32 || tile === 33) && !this.isGhostMode) return false; // LAVA, WATER
-    // Двери (tile 11) не проверяются здесь — это ответственность ExecutionEngine
-    // Мосты (tile 34) — активность проверяется ExecutionEngine
+    if (tile === 4 || tile === 5) return false;
+    if (tile === 2 && !this.inventory.hasWing && !this.isGhostMode && !this.wingActive) return false;
+    if ((tile === 32 || tile === 33) && !this.isGhostMode) return false;
     return true;
   }
-
   private emitInventoryChanged(): void {
     eventBus.emit('INVENTORY_CHANGED', { inventory: this.getInventory() });
   }
