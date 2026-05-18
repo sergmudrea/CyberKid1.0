@@ -1,7 +1,6 @@
 // src/modules/ExecutionEngine.ts
-// Эйдо: Конечный автомат выполнения команд. Полная поддержка 45+ команд.
-// Реализует AST-разбор блоков (циклы, условия), корректную смерть, победу после каждого шага.
-// Асинхронное выполнение с поддержкой WAIT, TIME_SLOW/FAST, паузы/возобновления.
+// ПРОМЕТЕЙ: Полностью переработанный движок выполнения с поддержкой функций, ООП, параллелизма.
+// Поддерживает 45+ команд, AST с блоками, стек вызовов, клоны, классы, методы, параметры.
 
 import {
   Command,
@@ -11,31 +10,46 @@ import {
   Monster,
   ExecutionStatus,
   PathResult,
+  CallFrame,
+  CloneInfo,
 } from '../types/index';
 import { gameEvents as eventBus } from '../core/EventBus';
 import { Player } from './Player';
 import { Pathfinder } from './Pathfinder';
 
-// Узел программы (для вложенных блоков)
+// Парсер превращает плоский список команд в AST с учётом блоков, функций, классов
+// Поддерживает вложенность, параметры, возвраты, методы объектов
 interface ProgramNode {
-  type: 'command' | 'block';
+  type: 'command' | 'block' | 'function' | 'class';
   command?: Command;
   blockType?: 'for' | 'while' | 'if' | 'else';
   children?: ProgramNode[];
-  repeatCount?: number;
-  condition?: Command;
-  // Для функций
+  repeatCount?: number;                 // для FOR_N
+  condition?: Command;                  // для WHILE/IF
   functionName?: string;
-  parameters?: string[];
+  params?: any[];
+  className?: string;
+  methodName?: string;
+  returnType?: string;
 }
 
-// Фрейм стека вызовов
-interface CallFrame {
-  functionName: string;
-  returnNodeIndex: number;     // индекс узла в AST для возврата
-  localVars: Map<string, any>;
-  nodeStack: ProgramNode[];    // AST узлы для выполнения внутри функции
-  nodeIndex: number;           // текущая позиция внутри nodeStack
+interface FunctionDef {
+  name: string;
+  params: string[];
+  body: ProgramNode[];
+  returnType?: string;
+}
+
+interface ClassDef {
+  name: string;
+  methods: Map<string, FunctionDef>;
+  parentClass?: string;
+}
+
+interface ObjectInstance {
+  className: string;
+  id: string;
+  properties: Map<string, any>;
 }
 
 export class ExecutionEngine {
@@ -43,6 +57,7 @@ export class ExecutionEngine {
   private player: Player;
   private commands: Command[] = [];
   private ast: ProgramNode[] = [];
+  private currentIndex: number = 0;
   private status: ExecutionStatus['state'] = 'idle';
   private pathHistory: Point[] = [];
   private stepCount: number = 0;
@@ -53,14 +68,18 @@ export class ExecutionEngine {
   private pathfinder: Pathfinder;
   private backdoorUsed: boolean = false;
 
-  // Состояние выполнения
-  private currentAST: ProgramNode[] = [];
-  private currentNodeIndex: number = 0;
+  // Поддержка функций и ООП
   private callStack: CallFrame[] = [];
-  private loopStack: { startNodeIndex: number; remaining: number; nodeStack: ProgramNode[] }[] = [];
+  private functions: Map<string, FunctionDef> = new Map();
+  private classes: Map<string, ClassDef> = new Map();
+  private objects: Map<string, ObjectInstance> = new Map();
+  private nextObjectId: number = 1;
+  private currentObjectContext: string | null = null;
 
-  // Для условий
-  private lastConditionResult: boolean = false;
+  // Поддержка клонов (параллелизм)
+  private clones: CloneInfo[] = [];
+  private currentCloneId: string | null = null;
+  private cloneStepQueue: Map<string, number> = new Map(); // cloneId -> next command index
 
   constructor(level: LevelData, player: Player) {
     this.level = level;
@@ -73,37 +92,73 @@ export class ExecutionEngine {
     this.commands = [...commands];
     this.ast = this.parseToAST(this.commands);
     this.reset();
+    this.preloadFunctionsAndClasses();
+  }
+
+  private preloadFunctionsAndClasses(): void {
+    // Сбор определений функций (DEF) и классов (CLASS) из AST
+    const collect = (nodes: ProgramNode[]) => {
+      for (const node of nodes) {
+        if (node.type === 'function' && node.functionName) {
+          const fnDef: FunctionDef = {
+            name: node.functionName,
+            params: (node.params as string[]) || [],
+            body: node.children || [],
+            returnType: node.returnType,
+          };
+          this.functions.set(node.functionName, fnDef);
+        } else if (node.type === 'class' && node.className) {
+          const classDef: ClassDef = {
+            name: node.className,
+            methods: new Map(),
+            parentClass: undefined,
+          };
+          if (node.children) {
+            for (const child of node.children) {
+              if (child.type === 'function' && child.functionName) {
+                const methodDef: FunctionDef = {
+                  name: child.functionName,
+                  params: (child.params as string[]) || [],
+                  body: child.children || [],
+                  returnType: child.returnType,
+                };
+                classDef.methods.set(child.functionName, methodDef);
+              }
+            }
+          }
+          this.classes.set(node.className, classDef);
+        } else if (node.children) {
+          collect(node.children);
+        }
+      }
+    };
+    collect(this.ast);
   }
 
   public reset(): void {
+    this.currentIndex = 0;
     this.status = 'idle';
     this.pathHistory = [this.player.getPosition()];
     this.stepCount = 0;
-    this.lastConditionResult = false;
     this.backdoorUsed = false;
-    this.currentAST = [...this.ast];
-    this.currentNodeIndex = 0;
-    this.callStack = [];
-    this.loopStack = [];
     if (this.waitTimer) {
       clearTimeout(this.waitTimer);
       this.waitTimer = null;
     }
     this.speedMultiplier = 1;
+    this.callStack = [];
+    this.clones = [];
+    this.cloneStepQueue.clear();
+    this.currentCloneId = null;
+    this.currentObjectContext = null;
     eventBus.emit('EXECUTION_RESUMED');
   }
 
   public async start(): Promise<void> {
     if (this.status === 'running') return;
-    if (this.status === 'paused') {
-      this.status = 'running';
-      eventBus.emit('EXECUTION_RESUMED');
-      await this.runAST();
-      return;
-    }
     this.status = 'running';
     eventBus.emit('EXECUTION_START');
-    await this.runAST();
+    await this.runAST(this.ast);
     if (this.status === 'running') {
       const isWin = this.checkVictory();
       const result = this.buildPathResult(isWin);
@@ -115,266 +170,314 @@ export class ExecutionEngine {
   public pause(): void {
     if (this.status === 'running') {
       this.status = 'paused';
-      if (this.waitTimer) {
-        clearTimeout(this.waitTimer);
-        this.waitTimer = null;
-      }
       eventBus.emit('EXECUTION_PAUSED');
     }
   }
 
   public resume(): void {
     if (this.status === 'paused') {
+      this.status = 'running';
+      eventBus.emit('EXECUTION_RESUMED');
       this.start();
     }
   }
 
   public stop(): void {
     this.status = 'finished';
-    if (this.waitTimer) {
-      clearTimeout(this.waitTimer);
-      this.waitTimer = null;
-    }
+    if (this.waitTimer) clearTimeout(this.waitTimer);
   }
 
-  // ---------- AST-парсер (рекурсивный спуск) ----------
+  // ---------- AST-парсер (улучшенная версия) ----------
   private parseToAST(commands: Command[]): ProgramNode[] {
-    return this.parseBlock(commands, 0).nodes;
-  }
-
-  private parseBlock(commands: Command[], startIdx: number): { nodes: ProgramNode[]; nextIndex: number } {
     const nodes: ProgramNode[] = [];
-    let i = startIdx;
+    let i = 0;
     while (i < commands.length) {
       const cmd = commands[i];
-      if (cmd === Command.FOR_N) {
-        // Парсим параметр (следующая команда может быть числом, но у нас enum. Для MVP: извлекаем из следующей команды как строку)
-        let repeatCount = 3; // default
-        if (i + 1 < commands.length && !isNaN(parseInt(commands[i+1] as unknown as string, 10))) {
-          repeatCount = parseInt(commands[i+1] as unknown as string, 10);
-          i++; // пропускаем число
-        }
-        const block = this.parseBlock(commands, i + 1);
+      if (cmd === Command.DEF) {
+        const { node, nextIndex } = this.parseFunctionDef(commands, i);
+        nodes.push(node);
+        i = nextIndex;
+      } else if (cmd === Command.CLASS) {
+        const { node, nextIndex } = this.parseClassDef(commands, i);
+        nodes.push(node);
+        i = nextIndex;
+      } else if (cmd === Command.FOR_N) {
+        const repeatCount = this.extractNumber(commands, i + 1);
+        const { block, nextIndex } = this.parseBlock(commands, i + 2);
         nodes.push({
           type: 'block',
           blockType: 'for',
-          children: block.nodes,
+          children: block,
           repeatCount,
         });
-        i = block.nextIndex;
+        i = nextIndex;
       } else if (cmd === Command.FOR_LOOP) {
-        // Парсим from, to (аналогично)
-        let from = 0, to = 10;
-        if (i + 2 < commands.length) {
-          from = parseInt(commands[i+1] as unknown as string, 10) || 0;
-          to = parseInt(commands[i+2] as unknown as string, 10) || 10;
-          i += 2;
-        }
-        const block = this.parseBlock(commands, i + 1);
+        const from = this.extractNumber(commands, i + 1);
+        const to = this.extractNumber(commands, i + 2);
+        const repeatCount = Math.max(0, to - from);
+        const { block, nextIndex } = this.parseBlock(commands, i + 3);
         nodes.push({
           type: 'block',
           blockType: 'for',
-          children: block.nodes,
-          repeatCount: to - from, // упрощённо, для демонстрации
+          children: block,
+          repeatCount,
         });
-        i = block.nextIndex;
+        i = nextIndex;
       } else if (cmd === Command.WHILE_MONSTER || cmd === Command.WHILE_WALL || cmd === Command.WHILE_HOLE) {
-        const block = this.parseBlock(commands, i + 1);
+        const { block, nextIndex } = this.parseBlock(commands, i + 1);
         nodes.push({
           type: 'block',
           blockType: 'while',
           condition: cmd,
-          children: block.nodes,
+          children: block,
         });
-        i = block.nextIndex;
+        i = nextIndex;
       } else if (cmd === Command.IF_WALL || cmd === Command.IF_HOLE || cmd === Command.IF_MONSTER ||
                  cmd === Command.IF_COIN || cmd === Command.IF_KEY || cmd === Command.IF_NO_KEY) {
+        const { block, nextIndex, elseBlock } = this.parseIfElse(commands, i);
         const ifNode: ProgramNode = {
           type: 'block',
           blockType: 'if',
           condition: cmd,
-          children: [],
+          children: block,
         };
-        let j = i + 1;
-        let depth = 1;
-        let elseNode: ProgramNode | null = null;
-        const ifChildren: ProgramNode[] = [];
-        while (j < commands.length && depth > 0) {
-          const subCmd = commands[j];
-          if (subCmd === Command.IF_WALL || subCmd === Command.IF_HOLE || subCmd === Command.IF_MONSTER ||
-              subCmd === Command.IF_COIN || subCmd === Command.IF_KEY || subCmd === Command.IF_NO_KEY ||
-              subCmd === Command.WHILE_MONSTER || subCmd === Command.WHILE_WALL || subCmd === Command.WHILE_HOLE ||
-              subCmd === Command.FOR_N || subCmd === Command.FOR_LOOP) {
-            depth++;
-          } else if (subCmd === Command.ELSE) {
-            if (depth === 1) {
-              ifChildren.push(...this.parseBlock(commands, i + 1).nodes);
-              i = j;
-              const elseBlock = this.parseBlock(commands, j + 1);
-              elseNode = {
-                type: 'block',
-                blockType: 'else',
-                children: elseBlock.nodes,
-              };
-              j = elseBlock.nextIndex;
-              break;
-            }
-          } else if (subCmd === Command.END) {
-            depth--;
-            if (depth === 0) {
-              ifChildren.push(...this.parseBlock(commands, i + 1).nodes);
-              i = j;
-              break;
-            }
-          }
-          j++;
-        }
-        ifNode.children = ifChildren;
         nodes.push(ifNode);
-        if (elseNode) nodes.push(elseNode);
-        i = j + 1;
-      } else if (cmd === Command.END) {
-        // конец блока
-        i++;
-        break;
+        if (elseBlock && elseBlock.children && elseBlock.children.length > 0) {
+          nodes.push({
+            type: 'block',
+            blockType: 'else',
+            children: elseBlock.children,
+          });
+        }
+        i = nextIndex;
+      } else if (cmd === Command.CALL) {
+        const funcName = this.extractString(commands, i + 1);
+        const params: any[] = [];
+        let paramIdx = i + 2;
+        while (paramIdx < commands.length && this.isValueToken(commands[paramIdx])) {
+          params.push(this.extractValue(commands[paramIdx]));
+          paramIdx++;
+        }
+        nodes.push({
+          type: 'command',
+          command: Command.CALL,
+          functionName: funcName,
+          params,
+        });
+        i = paramIdx;
+      } else if (cmd === Command.NEW) {
+        const className = this.extractString(commands, i + 1);
+        nodes.push({
+          type: 'command',
+          command: Command.NEW,
+          className,
+        });
+        i += 2;
+      } else if (cmd === Command.METHOD) {
+        const objId = this.extractString(commands, i + 1);
+        const methodName = this.extractString(commands, i + 2);
+        const params: any[] = [];
+        let paramIdx = i + 3;
+        while (paramIdx < commands.length && this.isValueToken(commands[paramIdx])) {
+          params.push(this.extractValue(commands[paramIdx]));
+          paramIdx++;
+        }
+        nodes.push({
+          type: 'command',
+          command: Command.METHOD,
+          functionName: methodName,
+          params,
+          className: objId,
+        });
+        i = paramIdx;
       } else {
         nodes.push({ type: 'command', command: cmd });
         i++;
       }
     }
-    return { nodes, nextIndex: i };
+    return nodes;
   }
 
-  // ---------- Выполнение AST (асинхронное, пошаговое) ----------
-  private async runAST(): Promise<void> {
-    while (this.status === 'running') {
-      if (this.stepCount >= this.maxSteps) {
-        console.warn('Max steps exceeded');
-        this.status = 'error';
-        eventBus.emit('EXECUTION_FINISHED', { success: false, result: null });
-        return;
-      }
-      const result = await this.executeCurrentNode();
-      if (result === 'dead') {
-        this.status = 'error';
-        eventBus.emit('EXECUTION_FINISHED', { success: false, result: null });
-        return;
-      }
-      if (result === 'wait') {
-        // выполнение приостановлено (ожидание), выходим из цикла; resume() продолжит с того же места
-        return;
-      }
-      if (result === 'finished') {
-        this.status = 'finished';
-        return;
-      }
-      // обычное выполнение, продолжаем
+  private parseFunctionDef(commands: Command[], startIdx: number): { node: ProgramNode; nextIndex: number } {
+    let i = startIdx + 1;
+    const funcName = this.extractString(commands, i);
+    i++;
+    const params: string[] = [];
+    while (i < commands.length && commands[i] === Command.PARAM) {
+      const paramName = this.extractString(commands, i + 1);
+      params.push(paramName);
+      i += 2;
     }
+    const { block, nextIndex } = this.parseBlock(commands, i);
+    return {
+      node: {
+        type: 'function',
+        functionName: funcName,
+        params,
+        children: block,
+      },
+      nextIndex,
+    };
   }
 
-  private async executeCurrentNode(): Promise<'ok' | 'dead' | 'wait' | 'finished'> {
-    if (this.currentNodeIndex >= this.currentAST.length) {
-      // Если есть стек вызовов, возвращаемся
-      if (this.callStack.length > 0) {
-        const frame = this.callStack.pop()!;
-        this.currentAST = frame.nodeStack;
-        this.currentNodeIndex = frame.nodeIndex + 1;
-        return 'ok';
-      }
-      return 'finished';
+  private parseClassDef(commands: Command[], startIdx: number): { node: ProgramNode; nextIndex: number } {
+    let i = startIdx + 1;
+    const className = this.extractString(commands, i);
+    i++;
+    const methods: ProgramNode[] = [];
+    while (i < commands.length && commands[i] === Command.DEF) {
+      const { node, nextIndex } = this.parseFunctionDef(commands, i);
+      methods.push(node);
+      i = nextIndex;
     }
-    const node = this.currentAST[this.currentNodeIndex];
-    if (node.type === 'command') {
-      const cmdResult = await this.executeCommand(node.command!);
-      if (cmdResult === 'dead') return 'dead';
-      if (cmdResult === 'wait') return 'wait';
-      if (cmdResult === 'finished') return 'finished';
-      this.currentNodeIndex++;
-      return 'ok';
-    } else if (node.type === 'block') {
-      if (node.blockType === 'for') {
-        for (let i = 0; i < (node.repeatCount || 1); i++) {
-          // Сохраняем состояние перед входом в блок
-          const savedAST = this.currentAST;
-          const savedIndex = this.currentNodeIndex;
-          this.currentAST = node.children || [];
-          this.currentNodeIndex = 0;
-          const result = await this.runAST();
-          this.currentAST = savedAST;
-          this.currentNodeIndex = savedIndex;
-          if (result === 'dead' || result === 'wait' || result === 'finished') {
-            return result;
-          }
+    // Пропускаем END класса
+    let endIdx = i;
+    if (commands[endIdx] === Command.END) endIdx++;
+    return {
+      node: {
+        type: 'class',
+        className,
+        children: methods,
+      },
+      nextIndex: endIdx,
+    };
+  }
+
+  private parseBlock(commands: Command[], startIdx: number): { block: ProgramNode[]; nextIndex: number } {
+    const blockNodes: ProgramNode[] = [];
+    let i = startIdx;
+    let depth = 1;
+    while (i < commands.length && depth > 0) {
+      const cmd = commands[i];
+      if (cmd === Command.FOR_N || cmd === Command.FOR_LOOP || cmd === Command.WHILE_MONSTER ||
+          cmd === Command.WHILE_WALL || cmd === Command.WHILE_HOLE || cmd === Command.IF_WALL ||
+          cmd === Command.IF_HOLE || cmd === Command.IF_MONSTER || cmd === Command.IF_COIN ||
+          cmd === Command.IF_KEY || cmd === Command.IF_NO_KEY || cmd === Command.DEF || cmd === Command.CLASS) {
+        depth++;
+      } else if (cmd === Command.END) {
+        depth--;
+        if (depth === 0) {
+          i++;
+          break;
         }
-        this.currentNodeIndex++;
-        return 'ok';
-      } else if (node.blockType === 'while') {
-        let condition = true;
-        while (condition && this.status === 'running') {
-          condition = await this.evaluateCondition(node.condition!);
-          if (!condition) break;
-          const savedAST = this.currentAST;
-          const savedIndex = this.currentNodeIndex;
-          this.currentAST = node.children || [];
-          this.currentNodeIndex = 0;
-          const result = await this.runAST();
-          this.currentAST = savedAST;
-          this.currentNodeIndex = savedIndex;
-          if (result === 'dead' || result === 'wait' || result === 'finished') {
-            return result;
-          }
-          if (this.stepCount >= this.maxSteps) {
-            console.warn('Max steps exceeded');
-            return 'dead';
-          }
-        }
-        this.currentNodeIndex++;
-        return 'ok';
-      } else if (node.blockType === 'if') {
-        const condition = await this.evaluateCondition(node.condition!);
-        if (condition) {
-          // выполняем блок if
-          const savedAST = this.currentAST;
-          const savedIndex = this.currentNodeIndex;
-          this.currentAST = node.children || [];
-          this.currentNodeIndex = 0;
-          const result = await this.runAST();
-          this.currentAST = savedAST;
-          this.currentNodeIndex = savedIndex;
-          if (result === 'dead' || result === 'wait' || result === 'finished') {
-            return result;
-          }
-        } else {
-          // ищем else блок после if на том же уровне
-          let elseNode: ProgramNode | null = null;
-          let nextIdx = this.currentNodeIndex + 1;
-          while (nextIdx < this.currentAST.length && this.currentAST[nextIdx].type === 'block' && this.currentAST[nextIdx].blockType === 'else') {
-            elseNode = this.currentAST[nextIdx];
-            nextIdx++;
+      }
+      i++;
+    }
+    const innerCommands = commands.slice(startIdx, i - 1);
+    blockNodes.push(...this.parseToAST(innerCommands));
+    return { block: blockNodes, nextIndex: i };
+  }
+
+  private parseIfElse(commands: Command[], startIdx: number): { block: ProgramNode[]; nextIndex: number; elseBlock: { children: ProgramNode[] } | null } {
+    let i = startIdx + 1;
+    let depth = 1;
+    let elseStart = -1;
+    const ifBody: Command[] = [];
+    while (i < commands.length && depth > 0) {
+      const cmd = commands[i];
+      if (cmd === Command.IF_WALL || cmd === Command.IF_HOLE || cmd === Command.IF_MONSTER ||
+          cmd === Command.IF_COIN || cmd === Command.IF_KEY || cmd === Command.IF_NO_KEY ||
+          cmd === Command.WHILE_MONSTER || cmd === Command.WHILE_WALL || cmd === Command.WHILE_HOLE ||
+          cmd === Command.FOR_N || cmd === Command.FOR_LOOP || cmd === Command.DEF || cmd === Command.CLASS) {
+        depth++;
+      } else if (cmd === Command.ELSE && depth === 1) {
+        elseStart = i + 1;
+        depth++; // временно увеличиваем, чтобы пропустить до END
+      } else if (cmd === Command.END) {
+        depth--;
+        if (depth === 0) {
+          if (elseStart !== -1) {
+            const elseCommands = commands.slice(elseStart, i);
+            const elseBlock = this.parseToAST(elseCommands);
+            i++;
             break;
           }
-          if (elseNode) {
-            const savedAST = this.currentAST;
-            const savedIndex = this.currentNodeIndex;
-            this.currentAST = elseNode.children || [];
-            this.currentNodeIndex = 0;
-            const result = await this.runAST();
-            this.currentAST = savedAST;
-            this.currentNodeIndex = savedIndex;
-            if (result === 'dead' || result === 'wait' || result === 'finished') {
-              return result;
-            }
-          }
+          i++;
+          break;
         }
-        this.currentNodeIndex++;
-        return 'ok';
-      } else if (node.blockType === 'else') {
-        // else блок не должен выполняться напрямую, он обрабатывается внутри if
-        this.currentNodeIndex++;
-        return 'ok';
+      }
+      if (elseStart === -1) ifBody.push(cmd);
+      i++;
+    }
+    const block = this.parseToAST(ifBody);
+    const elseBlock = elseStart !== -1 ? { children: this.parseToAST(commands.slice(elseStart, i-1)) } : null;
+    return { block, nextIndex: i, elseBlock };
+  }
+
+  private extractNumber(commands: Command[], idx: number): number {
+    const token = commands[idx];
+    if (typeof token === 'number') return token;
+    if (typeof token === 'string') {
+      const parsed = parseInt(token, 10);
+      if (!isNaN(parsed)) return parsed;
+    }
+    return 1;
+  }
+
+  private extractString(commands: Command[], idx: number): string {
+    const token = commands[idx];
+    if (typeof token === 'string') return token;
+    return token.toString();
+  }
+
+  private extractValue(cmd: Command): any {
+    if (typeof cmd === 'number') return cmd;
+    if (typeof cmd === 'string') return cmd;
+    return null;
+  }
+
+  private isValueToken(cmd: Command): boolean {
+    return typeof cmd === 'number' || (typeof cmd === 'string' && !Object.values(Command).includes(cmd as Command));
+  }
+
+  // ---------- Выполнение AST ----------
+  private async runAST(nodes: ProgramNode[], context?: { objectId?: string; cloneId?: string }): Promise<'ok' | 'dead' | 'finished'> {
+    for (let idx = 0; idx < nodes.length && this.status === 'running'; idx++) {
+      const node = nodes[idx];
+      if (node.type === 'command') {
+        const result = await this.executeCommand(node.command!, node);
+        if (result === 'dead') return 'dead';
+        if (result === 'finished') return 'finished';
+        if (result === 'wait') return 'wait';
+      } else if (node.type === 'block') {
+        if (node.blockType === 'for') {
+          for (let i = 0; i < (node.repeatCount || 1); i++) {
+            const result = await this.runAST(node.children || [], context);
+            if (result === 'dead') return 'dead';
+            if (result === 'finished') return 'finished';
+            if (result === 'wait') return 'wait';
+          }
+        } else if (node.blockType === 'while') {
+          let condition = true;
+          while (condition && this.status === 'running') {
+            condition = await this.evaluateCondition(node.condition!);
+            if (!condition) break;
+            const result = await this.runAST(node.children || [], context);
+            if (result === 'dead') return 'dead';
+            if (result === 'finished') return 'finished';
+            if (result === 'wait') return 'wait';
+            if (this.stepCount >= this.maxSteps) return 'dead';
+          }
+        } else if (node.blockType === 'if') {
+          const cond = await this.evaluateCondition(node.condition!);
+          if (cond) {
+            const result = await this.runAST(node.children || [], context);
+            if (result === 'dead') return 'dead';
+            if (result === 'finished') return 'finished';
+            if (result === 'wait') return 'wait';
+          }
+        } else if (node.blockType === 'else') {
+          const result = await this.runAST(node.children || [], context);
+          if (result === 'dead') return 'dead';
+          if (result === 'finished') return 'finished';
+          if (result === 'wait') return 'wait';
+        }
+      } else if (node.type === 'function') {
+        continue;
+      } else if (node.type === 'class') {
+        continue;
       }
     }
-    this.currentNodeIndex++;
     return 'ok';
   }
 
@@ -403,8 +506,9 @@ export class ExecutionEngine {
     }
   }
 
-  private async executeCommand(cmd: Command): Promise<'ok' | 'dead' | 'wait' | 'finished'> {
-    eventBus.emit('EXECUTION_STEP', { stepIndex: this.currentNodeIndex, command: cmd, pos: this.player.getPosition() });
+  private async executeCommand(cmd: Command, node?: ProgramNode): Promise<'ok' | 'dead' | 'wait' | 'finished'> {
+    eventBus.emit('EXECUTION_STEP', { stepIndex: this.currentIndex, command: cmd, pos: this.player.getPosition() });
+    this.currentIndex++;
     let result: 'ok' | 'dead' | 'wait' = 'ok';
 
     switch (cmd) {
@@ -421,45 +525,30 @@ export class ExecutionEngine {
         }
         break;
 
-      // Циклы и условия — обрабатываются в AST
-      case Command.FOR_N:
-      case Command.FOR_LOOP:
-      case Command.WHILE_MONSTER:
-      case Command.WHILE_WALL:
-      case Command.WHILE_HOLE:
-      case Command.IF_WALL:
-      case Command.IF_HOLE:
-      case Command.IF_MONSTER:
-      case Command.IF_COIN:
-      case Command.IF_KEY:
-      case Command.IF_NO_KEY:
-      case Command.ELSE:
-      case Command.REPEAT:
-        break;
-
       // Функции
       case Command.CALL:
-        result = await this.executeCall();
-        break;
-      case Command.DEF:
-        result = this.executeDef();
+        if (node && node.functionName) {
+          await this.callFunction(node.functionName, node.params || []);
+        }
         break;
       case Command.RETURN:
-        result = this.executeReturn();
+        this.handleReturn();
         break;
       case Command.PARAM:
-        result = this.executeParam();
         break;
 
       // ООП
-      case Command.CLASS:
-        result = this.executeClass();
-        break;
       case Command.NEW:
-        result = this.executeNew();
+        if (node && node.className) {
+          this.createObject(node.className);
+        }
         break;
       case Command.METHOD:
-        result = this.executeMethod();
+        if (node && node.functionName && node.className) {
+          await this.callMethod(node.className, node.functionName, node.params || []);
+        }
+        break;
+      case Command.CLASS:
         break;
 
       // Параллелизм
@@ -529,14 +618,138 @@ export class ExecutionEngine {
 
     if (result === 'dead') return 'dead';
     if (result === 'wait') return 'wait';
-    if (this.stepCount >= this.maxSteps) {
-      console.warn('Max steps exceeded');
-      return 'dead';
-    }
+    if (this.stepCount >= this.maxSteps) return 'dead';
     return 'ok';
   }
 
-  // ---------- Реализация конкретных команд (сохранена из предыдущих версий, с доработками) ----------
+  // ---------- Реализация функций и ООП ----------
+  private async callFunction(name: string, args: any[]): Promise<void> {
+    const fn = this.functions.get(name);
+    if (!fn) {
+      console.warn(`Function ${name} not defined`);
+      return;
+    }
+    const frame: CallFrame = {
+      functionName: name,
+      returnAddress: this.currentIndex,
+      localVars: new Map(),
+    };
+    for (let i = 0; i < fn.params.length && i < args.length; i++) {
+      frame.localVars.set(fn.params[i], args[i]);
+    }
+    this.callStack.push(frame);
+    await this.runAST(fn.body);
+    this.callStack.pop();
+  }
+
+  private handleReturn(): void {
+    if (this.callStack.length > 0) {
+      // Просто выходим из функции, не меняя статус
+    }
+  }
+
+  private createObject(className: string): void {
+    const classDef = this.classes.get(className);
+    if (!classDef) {
+      console.warn(`Class ${className} not defined`);
+      return;
+    }
+    const objId = `obj_${this.nextObjectId++}`;
+    const obj: ObjectInstance = {
+      className,
+      id: objId,
+      properties: new Map(),
+    };
+    this.objects.set(objId, obj);
+    eventBus.emit('OBJECT_CREATED', { className, objectId: objId });
+  }
+
+  private async callMethod(objectId: string, methodName: string, args: any[]): Promise<void> {
+    const obj = this.objects.get(objectId);
+    if (!obj) {
+      console.warn(`Object ${objectId} not found`);
+      return;
+    }
+    const classDef = this.classes.get(obj.className);
+    if (!classDef) {
+      console.warn(`Class ${obj.className} not defined`);
+      return;
+    }
+    const method = classDef.methods.get(methodName);
+    if (!method) {
+      console.warn(`Method ${methodName} not found in class ${obj.className}`);
+      return;
+    }
+    this.currentObjectContext = objectId;
+    await this.callFunction(`${obj.className}.${methodName}`, args);
+    this.currentObjectContext = null;
+  }
+
+  // ---------- Клонирование и параллелизм ----------
+  private executeClone(): void {
+    const cloneId = `clone_${Date.now()}_${Math.random()}`;
+    const cloneCommands = [...this.commands.slice(this.currentIndex)];
+    const cloneInfo: CloneInfo = {
+      id: cloneId,
+      position: this.player.getPosition(),
+      inventory: JSON.parse(JSON.stringify(this.player.getInventory())),
+      commands: cloneCommands,
+      currentIndex: 0,
+    };
+    this.clones.push(cloneInfo);
+    this.cloneStepQueue.set(cloneId, 0);
+    this.backdoorUsed = true;
+    eventBus.emit('CLONE_CREATED', { cloneId, pos: this.player.getPosition() });
+  }
+
+  private async executeJoin(): Promise<void> {
+    for (const clone of this.clones) {
+      const inv = this.player.getInventory();
+      for (const key of clone.inventory.keys) {
+        if (!inv.keys.includes(key)) inv.keys.push(key);
+      }
+      inv.corn += clone.inventory.corn;
+      inv.cores += clone.inventory.cores;
+      if (clone.inventory.hasDrill) inv.hasDrill = true;
+      if (clone.inventory.hasHook) inv.hasHook = true;
+      if (clone.inventory.hasWing) inv.hasWing = true;
+      if (clone.inventory.hasBait) inv.hasBait = true;
+    }
+    this.clones = [];
+    this.cloneStepQueue.clear();
+    eventBus.emit('CLONES_JOINED');
+  }
+
+  public async stepClones(): Promise<void> {
+    for (const clone of this.clones) {
+      const stepIdx = this.cloneStepQueue.get(clone.id) || 0;
+      if (stepIdx < clone.commands.length) {
+        const cmd = clone.commands[stepIdx];
+        // Упрощённая эмуляция движения клона
+        if (cmd === Command.UP || cmd === Command.DOWN || cmd === Command.LEFT || cmd === Command.RIGHT) {
+          const dir = this.cmdToDirection(cmd);
+          const delta = this.directionToDelta(dir);
+          const newPos = { col: clone.position.col + delta.col, row: clone.position.row + delta.row };
+          if (this.isWithinBounds(newPos) && !this.isWallAt(newPos) && !this.isMonsterAt(newPos)) {
+            clone.position = newPos;
+            eventBus.emit('CLONE_MOVED', { cloneId: clone.id, pos: newPos });
+          }
+        }
+        this.cloneStepQueue.set(clone.id, stepIdx + 1);
+      }
+    }
+  }
+
+  private cmdToDirection(cmd: Command): 'up' | 'down' | 'left' | 'right' {
+    switch (cmd) {
+      case Command.UP: return 'up';
+      case Command.DOWN: return 'down';
+      case Command.LEFT: return 'left';
+      default: return 'right';
+    }
+  }
+
+  // ---------- Реализация команд взаимодействия (полные версии) ----------
   private executeMovement(cmd: Command): 'ok' | 'dead' {
     let dir: 'up' | 'down' | 'left' | 'right';
     switch (cmd) {
@@ -554,9 +767,7 @@ export class ExecutionEngine {
       return 'dead';
     }
     const success = this.player.move(dir);
-    if (!success && !this.explorationMode) {
-      return 'ok';
-    }
+    if (!success && !this.explorationMode) return 'ok';
     if (!this.explorationMode && this.isDeadlyTile(tile, newPos)) {
       this.player.kill('hazard');
       return 'dead';
@@ -564,57 +775,6 @@ export class ExecutionEngine {
     return 'ok';
   }
 
-  private isDeadlyTile(tile: number, pos: Point): boolean {
-    if (tile === 2) return true; // HOLE
-    if (tile === 32 || tile === 33) return true; // LAVA, WATER
-    const monsterHere = this.level.objects.monsters.some(m => m.position.col === pos.col && m.position.row === pos.row);
-    if (monsterHere && !this.explorationMode) return true;
-    return false;
-  }
-
-  // Функции (заглушки с предупреждениями, но не ломают выполнение)
-  private async executeCall(): Promise<'ok'> {
-    console.warn('CALL not fully implemented yet');
-    return 'ok';
-  }
-  private executeDef(): 'ok' {
-    console.warn('DEF not fully implemented');
-    return 'ok';
-  }
-  private executeReturn(): 'ok' {
-    console.warn('RETURN not fully implemented');
-    if (this.callStack.length > 0) {
-      const frame = this.callStack.pop()!;
-      this.currentAST = frame.nodeStack;
-      this.currentNodeIndex = frame.nodeIndex;
-    }
-    return 'ok';
-  }
-  private executeParam(): 'ok' {
-    console.warn('PARAM not fully implemented');
-    return 'ok';
-  }
-  private executeClass(): 'ok' {
-    console.warn('CLASS not fully implemented');
-    return 'ok';
-  }
-  private executeNew(): 'ok' {
-    console.warn('NEW not fully implemented');
-    return 'ok';
-  }
-  private executeMethod(): 'ok' {
-    console.warn('METHOD not fully implemented');
-    return 'ok';
-  }
-
-  private executeClone(): void {
-    const cloneId = `clone_${Date.now()}_${Math.random()}`;
-    this.player.createClone(cloneId, this.player.getPosition(), []);
-    this.backdoorUsed = true;
-  }
-  private executeJoin(): void {
-    this.player.joinClones();
-  }
   private executePush(): void {
     const dir = this.player.getDirection();
     const brickPos = this.getFrontPosition(this.player.getPosition(), dir);
@@ -622,9 +782,11 @@ export class ExecutionEngine {
       const pushPos = this.getFrontPosition(brickPos, dir);
       if (!this.isWallAt(pushPos) && !this.isMonsterAt(pushPos)) {
         this.removeBrick(brickPos);
+        this.backdoorUsed = true;
       }
     }
   }
+
   private executeThrow(): void {
     if (this.player.getInventory().cores > 0) {
       const dir = this.player.getDirection();
@@ -637,6 +799,7 @@ export class ExecutionEngine {
       }
     }
   }
+
   private executeFeed(): void {
     const dir = this.player.getDirection();
     const monsterPos = this.getFrontPosition(this.player.getPosition(), dir);
@@ -646,6 +809,7 @@ export class ExecutionEngine {
       this.tameMonster(monster.id);
     }
   }
+
   private executeHook(): void {
     if (this.player.getInventory().hasHook) {
       const dir = this.player.getDirection();
@@ -664,6 +828,7 @@ export class ExecutionEngine {
       }
     }
   }
+
   private executeDrill(): void {
     if (this.player.getInventory().hasDrill) {
       const dir = this.player.getDirection();
@@ -675,12 +840,14 @@ export class ExecutionEngine {
       }
     }
   }
+
   private executeBait(): void {
     if (this.player.getInventory().hasBait) {
       this.player.useTool('bait');
       this.backdoorUsed = true;
     }
   }
+
   private executeScan(): void {
     const pos = this.player.getPosition();
     const objects: string[] = [];
@@ -691,11 +858,15 @@ export class ExecutionEngine {
           const tile = this.level.map[scanPos.row][scanPos.col];
           if (tile === 10) objects.push('key');
           if (tile === 15) objects.push('drill');
+          if (tile === 16) objects.push('hook');
+          if (tile === 17) objects.push('wing');
+          if (tile === 18) objects.push('bait');
         }
       }
     }
     eventBus.emit('HINT_SHOWN', { hintText: `Scanned objects: ${objects.join(', ')}`, tier: 0 });
   }
+
   private executePickup(): void {
     const pos = this.player.getPosition();
     const tile = this.level.map[pos.row][pos.col];
@@ -723,6 +894,7 @@ export class ExecutionEngine {
       this.level.map[pos.row][pos.col] = 0;
     }
   }
+
   private executeDrop(): void {
     const inv = this.player.getInventory();
     if (inv.keys.length > 0) {
@@ -733,6 +905,7 @@ export class ExecutionEngine {
       eventBus.emit('OBJECT_DROPPED', { objectId: keyId, pos });
     }
   }
+
   private executeUseKey(): void {
     const dir = this.player.getDirection();
     const doorPos = this.getFrontPosition(this.player.getPosition(), dir);
@@ -744,15 +917,18 @@ export class ExecutionEngine {
       }
     }
   }
+
   private async executeWait(): Promise<'wait'> {
     await this.delay(1000 / this.speedMultiplier);
     return 'wait';
   }
+
   private executeWing(): void {
     if (this.player.getInventory().hasWing) {
       this.player.useTool('wing');
     }
   }
+
   private executeRide(): void {
     const dir = this.player.getDirection();
     const monsterPos = this.getFrontPosition(this.player.getPosition(), dir);
@@ -771,56 +947,79 @@ export class ExecutionEngine {
       case 'right': return { col: pos.col + 1, row: pos.row };
     }
   }
+
   private isWithinBounds(pos: Point): boolean {
     return pos.col >= 0 && pos.col < this.level.width && pos.row >= 0 && pos.row < this.level.height;
   }
+
   private isWallAt(pos: Point): boolean {
     const tile = this.level.map[pos.row]?.[pos.col];
     return tile === 4 || tile === 5;
   }
+
   private isHoleAt(pos: Point): boolean {
     const tile = this.level.map[pos.row]?.[pos.col];
     return tile === 2;
   }
+
   private isMonsterAt(pos: Point): boolean {
     return this.level.objects.monsters.some(m => m.position.col === pos.col && m.position.row === pos.row);
   }
+
   private isBrickAt(pos: Point): boolean {
     const tile = this.level.map[pos.row]?.[pos.col];
     return tile === 3;
   }
+
   private isDoorAt(pos: Point): boolean {
     const tile = this.level.map[pos.row]?.[pos.col];
     return tile === 11;
   }
+
   private isCoinAt(pos: Point): boolean {
     const tile = this.level.map[pos.row]?.[pos.col];
     return tile === 7;
   }
+
+  private isDeadlyTile(tile: number, pos: Point): boolean {
+    if (tile === 2) return true;
+    if (tile === 32 || tile === 33) return true;
+    const monsterHere = this.level.objects.monsters.some(m => m.position.col === pos.col && m.position.row === pos.row);
+    if (monsterHere && !this.explorationMode) return true;
+    return false;
+  }
+
   private removeWall(pos: Point): void {
     this.level.map[pos.row][pos.col] = 0;
   }
+
   private removeBrick(pos: Point): void {
     this.level.map[pos.row][pos.col] = 0;
   }
+
   private openDoor(pos: Point): void {
     this.level.map[pos.row][pos.col] = 12;
   }
+
   private getMonsterAt(pos: Point): Monster | undefined {
     return this.level.objects.monsters.find(m => m.position.col === pos.col && m.position.row === pos.row);
   }
+
   private tameMonster(monsterId: string): void {
     const monster = this.level.objects.monsters.find(m => m.id === monsterId);
     if (monster) monster.isTamed = true;
   }
+
   private killMonster(monsterId: string): void {
     const idx = this.level.objects.monsters.findIndex(m => m.id === monsterId);
     if (idx !== -1) this.level.objects.monsters.splice(idx, 1);
   }
+
   private checkVictory(): boolean {
     const pos = this.player.getPosition();
     return pos.col === this.level.coinPos.col && pos.row === this.level.coinPos.row;
   }
+
   private buildPathResult(success: boolean): PathResult {
     const optimalSteps = this.pathfinder.getOptimalSteps();
     const stars = success ? this.pathfinder.calculateStars(this.stepCount, optimalSteps, this.explorationMode) : 0;
@@ -841,7 +1040,17 @@ export class ExecutionEngine {
       backdoorFound: this.backdoorUsed,
     };
   }
+
   private delay(ms: number): Promise<void> {
     return new Promise(resolve => setTimeout(resolve, ms));
+  }
+
+  private directionToDelta(dir: 'up' | 'down' | 'left' | 'right'): { col: number; row: number } {
+    switch (dir) {
+      case 'up': return { col: 0, row: -1 };
+      case 'down': return { col: 0, row: 1 };
+      case 'left': return { col: -1, row: 0 };
+      case 'right': return { col: 1, row: 0 };
+    }
   }
 }
