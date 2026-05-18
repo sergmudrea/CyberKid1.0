@@ -1,30 +1,34 @@
 // src/managers/LevelManager.ts
-// Эйдо: Динамическая загрузка и кэширование уровней.
-// ⚠️ ВАЖНО: import.meta.glob работает только в dev-режиме Vite.
-// Для production (Android/Capacitor) необходимо использовать fetch + манифест уровней.
-// Рекомендация: перенести уровни в public/levels/, сгенерировать index.json со списком,
-// и загружать через fetch. Текущая реализация оставлена для прототипа.
+// ПРОМЕТЕЙ: Динамическая загрузка уровней через манифест (production-совместимо).
+// В dev-режиме можно использовать import.meta.glob, но для Capacitor и production-сборки
+// используется заранее сгенерированный манифест public/levels-manifest.json.
+// Манифест генерируется скриптом scripts/generate-level-manifest.js.
 
 import { LevelData, LevelMetadata } from '../types/index';
 import { gameEvents as eventBus } from '../core/EventBus';
 
-type LevelModule = { default: LevelData };
-
-interface LevelIndexEntry {
+interface ManifestEntry {
   id: string;
   worldId: string;
   levelNumber: number;
   name: string;
   isTutorial: boolean;
   optimalSteps: number;
-  modulePath: string;
+  path: string; // относительный путь к JSON-файлу уровня (например, "levels/meadow/001.json")
+}
+
+interface LevelManifest {
+  version: string;
+  levels: ManifestEntry[];
+  worlds: Record<string, string[]>; // worldId -> list of levelIds
 }
 
 export class LevelManager {
   private static instance: LevelManager;
-  private levelIndex: Map<string, LevelIndexEntry> = new Map();
-  private cache: Map<string, LevelData> = new Map();
+  private manifest: LevelManifest | null = null;
+  private levelIndex: Map<string, ManifestEntry> = new Map();
   private worldsLevels: Map<string, string[]> = new Map();
+  private cache: Map<string, LevelData> = new Map();
   private isLoading: Set<string> = new Set();
   private initialized: boolean = false;
 
@@ -41,28 +45,37 @@ export class LevelManager {
     LevelManager.instance = undefined as any;
   }
 
-  public async initialize(): Promise<void> {
+  public async initialize(manifestUrl: string = '/levels-manifest.json'): Promise<void> {
     if (this.initialized) return;
-    // ВНИМАНИЕ: для production нужно заменить на загрузку манифеста через fetch
-    const modules = import.meta.glob('/src/levels/**/*.json', { eager: false });
-    for (const path in modules) {
-      const fileName = path.split('/').pop()?.replace('.json', '') || '';
-      const worldId = path.split('/').slice(-2)[0];
-      const levelId = `${worldId}_${fileName}`;
-      this.levelIndex.set(levelId, {
-        id: levelId,
-        worldId,
-        levelNumber: this.extractNumber(fileName),
-        name: '',
-        isTutorial: false,
-        optimalSteps: 0,
-        modulePath: path,
-      });
-      if (!this.worldsLevels.has(worldId)) {
-        this.worldsLevels.set(worldId, []);
+    try {
+      const response = await fetch(manifestUrl);
+      if (!response.ok) {
+        throw new Error(`Failed to load manifest: ${response.status}`);
       }
-      this.worldsLevels.get(worldId)!.push(levelId);
+      this.manifest = await response.json() as LevelManifest;
+      this.buildIndex();
+      this.initialized = true;
+      console.log('[LevelManager] Initialized with manifest, total levels:', this.levelIndex.size);
+    } catch (error) {
+      console.error('[LevelManager] Failed to initialize:', error);
+      // В случае ошибки создаём пустой манифест (игра не запустится, но не крашнется)
+      this.manifest = { version: '1.0', levels: [], worlds: {} };
+      this.initialized = true;
     }
+  }
+
+  private buildIndex(): void {
+    if (!this.manifest) return;
+    this.levelIndex.clear();
+    this.worldsLevels.clear();
+    for (const entry of this.manifest.levels) {
+      this.levelIndex.set(entry.id, entry);
+      if (!this.worldsLevels.has(entry.worldId)) {
+        this.worldsLevels.set(entry.worldId, []);
+      }
+      this.worldsLevels.get(entry.worldId)!.push(entry.id);
+    }
+    // Сортируем уровни в каждом мире по levelNumber
     for (const [worldId, ids] of this.worldsLevels.entries()) {
       ids.sort((a, b) => {
         const aNum = this.levelIndex.get(a)?.levelNumber ?? 0;
@@ -71,7 +84,6 @@ export class LevelManager {
       });
       this.worldsLevels.set(worldId, ids);
     }
-    this.initialized = true;
   }
 
   public async loadLevel(levelId: string): Promise<LevelData | null> {
@@ -89,18 +101,18 @@ export class LevelManager {
     try {
       const entry = this.levelIndex.get(levelId);
       if (!entry) {
-        console.error(`[LevelManager] Level ${levelId} not found`);
+        console.error(`[LevelManager] Level ${levelId} not found in manifest`);
         return null;
       }
-      const module = (await import(/* @vite-ignore */ entry.modulePath)) as LevelModule;
-      const levelData = module.default;
+      const response = await fetch(entry.path);
+      if (!response.ok) {
+        throw new Error(`Failed to load level ${levelId}: ${response.status}`);
+      }
+      const levelData = await response.json() as LevelData;
       if (!this.validateLevel(levelData)) {
         console.error(`[LevelManager] Invalid level ${levelId}`);
         return null;
       }
-      entry.name = levelData.name;
-      entry.isTutorial = levelData.isTutorial || false;
-      entry.optimalSteps = levelData.optimalSteps;
       this.cache.set(levelId, levelData);
       eventBus.emit('LEVEL_LOADED', { level: levelData });
       return levelData;
@@ -159,11 +171,6 @@ export class LevelManager {
 
   public clearCache(): void {
     this.cache.clear();
-  }
-
-  private extractNumber(fileName: string): number {
-    const match = fileName.match(/\d+/);
-    return match ? parseInt(match[0], 10) : 0;
   }
 
   private validateLevel(level: LevelData): boolean {
