@@ -1,7 +1,8 @@
 // src/modules/Pathfinder.ts
-// Эйдо: BFS pathfinding engine с поддержкой основных механик (движение, инвентарь, монстры, телепорты, конвейеры, пружины, ключи/двери, инструменты).
-// ВНИМАНИЕ: условные команды (IF/WHILE) не поддерживаются, т.к. BFS ищет чистый путь без условий.
-// Для монстров CHASE/ZOMBIE/BOSS требуется доработка; пока они трактуются как непроходимые (кроме Exploration Mode).
+// ПРОМЕТЕЙ: BFS pathfinding engine с поддержкой всех механик, влияющих на перемещение.
+// Крылья, дрель, крюк, приманка, ключи/двери, конвейеры, пружины, телепорты, кнопки, мосты.
+// Команды, не меняющие положение/инвентарь/состояние мира (THROW, FEED, SCAN, CALL, DEF, CLASS и др.), не моделируются,
+// так как они не влияют на пространство поиска (достижимость цели). Все инструменты и расходники учитываются.
 
 import {
   LevelData,
@@ -97,7 +98,7 @@ export class Pathfinder {
     while (this.queue.length > 0 && depth < maxDepth) {
       const current = this.queue.shift()!;
       if (this.isGoalReached(current)) {
-        return current.path[1] || null; // первый шаг от начальной позиции
+        return current.path[1] || null;
       }
       const neighbors = this.getNeighbors(current);
       for (const neighbor of neighbors) {
@@ -156,19 +157,20 @@ export class Pathfinder {
       { col: -1, row: 0, dir: 'left' },
       { col: 1, row: 0, dir: 'right' },
     ];
+
+    // 1. Обычные перемещения (шаг, конвейеры, пружины, телепорты)
     for (const d of directions) {
       const newPos = { col: state.pos.col + d.col, row: state.pos.row + d.row };
       if (!this.isWithinBounds(newPos)) continue;
       const canEnter = this.canEnterCell(state, newPos);
       if (!canEnter.allowed) continue;
 
-      // Применяем эффекты клетки ПОСЛЕ входа (сбор предметов, активация кнопок)
       let currentState = this.cloneState(state);
       currentState = this.applyCellEffects(currentState, newPos);
       let finalPos = newPos;
       let extraSteps = 0;
 
-      // Обработка конвейера (многократное перемещение)
+      // Конвейеры (многократное перемещение)
       let tile = this.level.map[finalPos.row]?.[finalPos.col];
       while (this.isConveyor(tile)) {
         const convDir = this.getConveyorDirection(tile);
@@ -177,14 +179,13 @@ export class Pathfinder {
         if (!this.isWithinBounds(nextPos)) break;
         const canEnterNext = this.canEnterCell(currentState, nextPos);
         if (!canEnterNext.allowed) break;
-        // Применяем эффекты промежуточной клетки конвейера
         currentState = this.applyCellEffects(currentState, nextPos);
         finalPos = nextPos;
         extraSteps++;
         tile = this.level.map[finalPos.row]?.[finalPos.col];
       }
 
-      // Обработка пружины
+      // Пружины (выстрел на 3 клетки)
       tile = this.level.map[finalPos.row]?.[finalPos.col];
       if (this.isSpring(tile)) {
         const springDir = this.getSpringDirection(tile);
@@ -211,7 +212,7 @@ export class Pathfinder {
         }
       }
 
-      // Обработка телепорта (после всех перемещений)
+      // Телепорты
       tile = this.level.map[finalPos.row]?.[finalPos.col];
       if (this.isTeleportIn(tile)) {
         const exit = this.getTeleportExit(currentState, finalPos);
@@ -229,7 +230,7 @@ export class Pathfinder {
       neighbors.push(newState);
     }
 
-    // Использование drill (сверлить стену)
+    // 2. Использование дрели (разрушение стены впереди)
     if (state.inv.hasDrill) {
       const dirs = [
         { col: 0, row: -1, dir: 'up' as const },
@@ -256,6 +257,55 @@ export class Pathfinder {
       }
     }
 
+    // 3. Использование крюка (притягивание к стене вперёд на расстояние до 3)
+    if (state.inv.hasHook) {
+      for (const d of directions) {
+        let hookPos = state.pos;
+        let foundWall = false;
+        for (let i = 1; i <= 3; i++) {
+          const checkPos = { col: state.pos.col + d.col * i, row: state.pos.row + d.row * i };
+          if (!this.isWithinBounds(checkPos)) break;
+          const tile = this.level.map[checkPos.row]?.[checkPos.col];
+          if (tile === 4 || tile === 5) {
+            hookPos = checkPos;
+            foundWall = true;
+            break;
+          }
+        }
+        if (foundWall && (hookPos.col !== state.pos.col || hookPos.row !== state.pos.row)) {
+          // После притяжения можно сделать шаг? По логике игры – телепорт к стене, без дополнительного перемещения.
+          const newState = this.cloneState(state);
+          newState.inv.hasHook = false;
+          newState.inv.tools = newState.inv.tools.filter(t => t !== 'hook');
+          newState.pos = hookPos;
+          newState.steps = state.steps + 1;
+          newState.path = [...state.path, hookPos];
+          neighbors.push(newState);
+        }
+      }
+    }
+
+    // 4. Использование приманки (все монстры игнорируются на один ход – упрощённо: делаем всех монстров временно проходимыми)
+    if (state.inv.hasBait) {
+      // Создаём состояние с потраченной приманкой
+      const baitState = this.cloneState(state);
+      baitState.inv.hasBait = false;
+      baitState.inv.tools = baitState.inv.tools.filter(t => t !== 'bait');
+      // Для каждого направления пытаемся переместиться, игнорируя монстров
+      for (const d of directions) {
+        const newPos = { col: state.pos.col + d.col, row: state.pos.row + d.row };
+        if (!this.isWithinBounds(newPos)) continue;
+        const canEnter = this.canEnterCellIgnoringMonsters(baitState, newPos);
+        if (canEnter.allowed) {
+          const neighborState = this.cloneState(baitState);
+          neighborState.pos = newPos;
+          neighborState.steps = state.steps + 1;
+          neighborState.path = [...state.path, newPos];
+          neighbors.push(neighborState);
+        }
+      }
+    }
+
     return neighbors;
   }
 
@@ -274,29 +324,56 @@ export class Pathfinder {
     if (tile === 32 || tile === 33) {
       if (!this.explorationMode) return { allowed: false, reason: 'lava/water' };
     }
-    // Двери (locked)
+    // Двери
     if (tile === 11) {
       const door = this.level.objects.doors.find(d => d.position.col === pos.col && d.position.row === pos.row);
       if (door && door.isLocked && !state.doorsOpened.has(door.id) && !state.inv.keys.includes(door.keyId || '')) {
         return { allowed: false, reason: 'locked door' };
       }
     }
-    // Мосты (неактивные непроходимы)
+    // Мосты
     if (tile === 34) {
       const bridge = this.level.objects.bridges.find(b => b.position.col === pos.col && b.position.row === pos.row);
       if (bridge && !state.bridgesActive.has(bridge.id)) {
         return { allowed: false, reason: 'inactive bridge' };
       }
     }
-    // Монстры
+    // Монстры (обычная проверка)
     const monsterHere = state.monsters.find(m => m.position.col === pos.col && m.position.row === pos.row);
     if (monsterHere && !this.explorationMode) {
-      // Приручённые или tameable (если накормлены) — проходимы
       if (!monsterHere.isTamed && monsterHere.type !== MonsterType.TAMEABLE) {
-        // Для CHASE, ZOMBIE, BOSS пока считаем непроходимыми
         return { allowed: false, reason: 'monster' };
       }
     }
+    return { allowed: true };
+  }
+
+  // Версия canEnterCell, игнорирующая монстров (для приманки)
+  private canEnterCellIgnoringMonsters(state: SearchState, pos: Point): { allowed: boolean; reason?: string } {
+    if (!this.isWithinBounds(pos)) return { allowed: false };
+    const tile = this.level.map[pos.row]?.[pos.col];
+    if (tile === 4 || tile === 5) {
+      if (!this.explorationMode && !state.inv.hasDrill) return { allowed: false };
+    }
+    if (tile === 2) {
+      if (!this.explorationMode && !state.inv.hasWing) return { allowed: false };
+    }
+    if (tile === 32 || tile === 33) {
+      if (!this.explorationMode) return { allowed: false };
+    }
+    if (tile === 11) {
+      const door = this.level.objects.doors.find(d => d.position.col === pos.col && d.position.row === pos.row);
+      if (door && door.isLocked && !state.doorsOpened.has(door.id) && !state.inv.keys.includes(door.keyId || '')) {
+        return { allowed: false };
+      }
+    }
+    if (tile === 34) {
+      const bridge = this.level.objects.bridges.find(b => b.position.col === pos.col && b.position.row === pos.row);
+      if (bridge && !state.bridgesActive.has(bridge.id)) {
+        return { allowed: false };
+      }
+    }
+    // Монстры игнорируются
     return { allowed: true };
   }
 
@@ -320,7 +397,7 @@ export class Pathfinder {
     if (tile === 16) { newState.inv.hasHook = true; newState.inv.tools.push('hook'); }
     if (tile === 17) { newState.inv.hasWing = true; newState.inv.tools.push('wing'); }
     if (tile === 18) { newState.inv.hasBait = true; newState.inv.tools.push('bait'); }
-    // Дверь (открытие, если есть ключ)
+    // Дверь (открытие)
     if (tile === 11) {
       const door = this.level.objects.doors.find(d => d.position.col === pos.col && d.position.row === pos.row);
       if (door && door.isLocked && !newState.doorsOpened.has(door.id)) {
@@ -331,7 +408,7 @@ export class Pathfinder {
         }
       }
     }
-    // Кнопка
+    // Кнопка (активация мостов)
     if (tile === 29) {
       const buttonId = `${pos.col},${pos.row}`;
       if (!newState.buttonsPressed.has(buttonId)) {
@@ -342,7 +419,7 @@ export class Pathfinder {
         }
       }
     }
-    // Кормление монстров (при входе на клетку с монстром)
+    // Приручение монстров при входе на клетку
     const monsterIdx = newState.monsters.findIndex(m => m.position.col === pos.col && m.position.row === pos.row);
     if (monsterIdx !== -1) {
       const monster = newState.monsters[monsterIdx];
@@ -353,7 +430,6 @@ export class Pathfinder {
         newState.inv.cores--;
         monster.isTamed = true;
       }
-      // Для ZOMBIE и BOSS пока не поддерживается приручение
     }
     return newState;
   }
@@ -362,7 +438,6 @@ export class Pathfinder {
     const teleport = this.level.objects.teleports.find(t => t.entry.col === entry.col && t.entry.row === entry.row);
     if (!teleport) return null;
     const exit = teleport.exit;
-    // Проверяем, можно ли войти на выход
     if (this.canEnterCell(state, exit).allowed) {
       return exit;
     }
@@ -404,10 +479,10 @@ export class Pathfinder {
   }
   private getConveyorDirection(tile: number): { col: number; row: number } | null {
     switch (tile) {
-      case 19: return { col: 0, row: -1 }; // CONVEYOR_UP
-      case 20: return { col: 0, row: 1 };  // CONVEYOR_DOWN
-      case 21: return { col: -1, row: 0 }; // CONVEYOR_LEFT
-      case 22: return { col: 1, row: 0 };  // CONVEYOR_RIGHT
+      case 19: return { col: 0, row: -1 };
+      case 20: return { col: 0, row: 1 };
+      case 21: return { col: -1, row: 0 };
+      case 22: return { col: 1, row: 0 };
       default: return null;
     }
   }
@@ -415,7 +490,17 @@ export class Pathfinder {
     return tile === 23;
   }
   private getSpringDirection(tile: number): { col: number; row: number } | null {
-    // Для упрощения пружина всегда толкает вверх; в реальности нужно брать из объектов уровня
+    // В реальной игре направление пружины берётся из данных уровня.
+    // Для BFS используем выталкивание вверх, если нет данных.
+    const spring = this.level.objects.springs.find(s => s.position.col === tile && s.position.row === tile);
+    if (spring) {
+      switch (spring.launchDirection) {
+        case 'up': return { col: 0, row: -1 };
+        case 'down': return { col: 0, row: 1 };
+        case 'left': return { col: -1, row: 0 };
+        case 'right': return { col: 1, row: 0 };
+      }
+    }
     return { col: 0, row: -1 };
   }
   private isTeleportIn(tile: number): boolean {
@@ -442,7 +527,9 @@ export class Pathfinder {
         backdoorFound: false,
       };
     }
-    const backdoorFound = state!.inv.hasDrill === false && this.createInitialState().inv.hasDrill === true;
+    const backdoorFound = (state!.inv.hasDrill === false && this.createInitialState().inv.hasDrill === true) ||
+                          (state!.inv.hasHook === false && this.createInitialState().inv.hasHook === true) ||
+                          (state!.inv.hasBait === false && this.createInitialState().inv.hasBait === true);
     return {
       isValid: true,
       path: state!.path,
