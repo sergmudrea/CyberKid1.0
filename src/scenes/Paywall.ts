@@ -1,7 +1,8 @@
 // src/scenes/Paywall.ts
-// Эйдо: Сцена покупки премиум-мира (Paywall). Отображает информацию о мире,
-// цену, кнопку покупки (с интеграцией unlockManager), восстановление покупок,
-// кнопку "Назад". При успешной покупке разблокирует мир и возвращает на карту миров.
+// ПРОМЕТЕЙ: Сцена покупки премиум-мира с полноценной интеграцией реального UnlockManager.
+// Поддерживает реальные покупки через Google Play / App Store (через Capacitor Billing),
+// а также симуляцию для веб-версии. Отображает загрузку, обработку ошибок, восстановление покупок.
+// Полная локализация (ru/en).
 
 import { Scene } from 'phaser';
 import { gameEvents as eventBus } from '../core/EventBus';
@@ -17,7 +18,9 @@ export class Paywall extends Scene {
   private productInfo: { title: string; description: string; price: string } | null = null;
   private purchaseButton: Phaser.GameObjects.Text;
   private restoreButton: Phaser.GameObjects.Text;
-  private contentContainer: Phaser.GameObjects.Container;
+  private loadingOverlay: Phaser.GameObjects.Container;
+  private loadingText: Phaser.GameObjects.Text;
+  private backButton: Phaser.GameObjects.Text;
 
   constructor() {
     super('Paywall');
@@ -38,6 +41,7 @@ export class Paywall extends Scene {
     this.createPriceButton();
     this.createRestoreButton();
     this.createBackButton();
+    this.createLoadingOverlay();
     this.setupEventListeners();
     this.events.once('shutdown', () => this.removeEventListeners());
   }
@@ -70,7 +74,7 @@ export class Paywall extends Scene {
         price: product.price,
       };
     } else {
-      // fallback с разными ценами для разных миров
+      // Fallback (на случай, если продукт не загружен из магазина)
       const worldPrices: Record<string, string> = {
         ocean: '$2.99',
         clouds: '$2.99',
@@ -123,9 +127,6 @@ export class Paywall extends Scene {
       fontSize: '14px',
       color: '#ffcc00',
     }).setOrigin(0.5);
-    // Создаём контейнер и добавляем его на сцену
-    this.contentContainer = this.add.container(0, 0);
-    this.contentContainer.add([iconText, title, desc, levelsText]);
   }
 
   private createPriceButton(): void {
@@ -161,80 +162,100 @@ export class Paywall extends Scene {
   private createBackButton(): void {
     const width = this.cameras.main.width;
     const height = this.cameras.main.height;
-    const backBtn = this.add.text(50, height - 40, this.lang === 'ru' ? '← НАЗАД' : '← BACK', {
+    this.backButton = this.add.text(50, height - 40, this.lang === 'ru' ? '← НАЗАД' : '← BACK', {
       fontSize: '20px',
       color: '#ffffff',
       backgroundColor: '#2a2a4a',
       padding: { x: 16, y: 6 },
     }).setInteractive({ useHandCursor: true });
-    backBtn.on('pointerdown', () => this.scene.start('WorldMap'));
-    backBtn.on('pointerover', () => backBtn.setColor('#00ffcc'));
-    backBtn.on('pointerout', () => backBtn.setColor('#ffffff'));
+    this.backButton.on('pointerdown', () => this.scene.start('WorldMap'));
+    this.backButton.on('pointerover', () => this.backButton.setColor('#00ffcc'));
+    this.backButton.on('pointerout', () => this.backButton.setColor('#ffffff'));
+  }
+
+  private createLoadingOverlay(): void {
+    const width = this.cameras.main.width;
+    const height = this.cameras.main.height;
+    this.loadingOverlay = this.add.container(0, 0);
+    const overlayBg = this.add.rectangle(0, 0, width, height, 0x000000, 0.8);
+    overlayBg.setOrigin(0, 0);
+    this.loadingOverlay.add(overlayBg);
+    this.loadingText = this.add.text(width / 2, height / 2, this.lang === 'ru' ? 'ОБРАБОТКА...' : 'PROCESSING...', {
+      fontFamily: 'monospace',
+      fontSize: '24px',
+      color: '#ffffff',
+    }).setOrigin(0.5);
+    this.loadingOverlay.add(this.loadingText);
+    this.loadingOverlay.setVisible(false);
+  }
+
+  private showLoading(show: boolean): void {
+    this.loadingOverlay.setVisible(show);
+    this.purchaseButton.setVisible(!show);
+    this.restoreButton.setVisible(!show);
+    this.backButton.setVisible(!show);
   }
 
   private async purchase(): Promise<void> {
     if (this.isPurchasing) return;
     this.isPurchasing = true;
-    const originalText = this.purchaseButton.text;
-    this.purchaseButton.setText(this.lang === 'ru' ? 'ОБРАБОТКА...' : 'PROCESSING...');
-    this.purchaseButton.disableInteractive();
-    this.restoreButton.disableInteractive();
+    this.showLoading(true);
 
     const success = await unlockManager.purchase(this.sku);
     this.isPurchasing = false;
+    this.showLoading(false);
+
     if (success) {
+      // После успешной покупки разблокируем мир через ProgressManager
       progressManager.unlockWorld(this.worldId);
-      alert(this.lang === 'ru' ? 'Мир успешно разблокирован!' : 'World unlocked successfully!');
+      const msg = this.lang === 'ru' ? 'Мир успешно разблокирован!' : 'World unlocked successfully!';
+      alert(msg);
       this.scene.start('WorldMap');
     } else {
-      this.purchaseButton.setText(originalText);
-      this.purchaseButton.setInteractive({ useHandCursor: true });
-      this.restoreButton.setInteractive({ useHandCursor: true });
-      alert(this.lang === 'ru' ? 'Ошибка покупки. Попробуйте позже.' : 'Purchase failed. Please try again.');
+      const msg = this.lang === 'ru' ? 'Ошибка покупки. Попробуйте позже.' : 'Purchase failed. Please try again.';
+      alert(msg);
     }
   }
 
   private async restorePurchases(): Promise<void> {
     if (this.isPurchasing) return;
     this.isPurchasing = true;
-    const originalText = this.restoreButton.text;
-    this.restoreButton.setText(this.lang === 'ru' ? 'ВОССТАНОВЛЕНИЕ...' : 'RESTORING...');
-    this.restoreButton.disableInteractive();
-    this.purchaseButton.disableInteractive();
+    this.showLoading(true);
 
     await unlockManager.restorePurchases();
     this.isPurchasing = false;
-    // Проверяем, разблокирован ли уже этот мир после восстановления
+    this.showLoading(false);
+
+    // Проверяем, разблокирован ли этот мир после восстановления
     if (progressManager.isWorldUnlocked(this.worldId) || unlockManager.isWorldUnlocked(this.worldId)) {
-      alert(this.lang === 'ru' ? 'Мир успешно восстановлен!' : 'World restored successfully!');
+      const msg = this.lang === 'ru' ? 'Мир успешно восстановлен!' : 'World restored successfully!';
+      alert(msg);
       this.scene.start('WorldMap');
     } else {
-      this.restoreButton.setText(originalText);
-      this.restoreButton.setInteractive({ useHandCursor: true });
-      this.purchaseButton.setInteractive({ useHandCursor: true });
-      alert(this.lang === 'ru' ? 'Покупки не найдены.' : 'No purchases found.');
+      const msg = this.lang === 'ru' ? 'Покупки не найдены.' : 'No purchases found.';
+      alert(msg);
     }
   }
 
   private setupEventListeners(): void {
-    eventBus.on('PURCHASE_COMPLETED', this.onPurchaseCompleted.bind(this));
-    eventBus.on('PURCHASE_FAILED', this.onPurchaseFailed.bind(this));
+    eventBus.on('PURCHASE_COMPLETED', this.onPurchaseCompleted);
+    eventBus.on('PURCHASE_FAILED', this.onPurchaseFailed);
   }
 
   private removeEventListeners(): void {
-    eventBus.off('PURCHASE_COMPLETED', this.onPurchaseCompleted.bind(this));
-    eventBus.off('PURCHASE_FAILED', this.onPurchaseFailed.bind(this));
+    eventBus.off('PURCHASE_COMPLETED', this.onPurchaseCompleted);
+    eventBus.off('PURCHASE_FAILED', this.onPurchaseFailed);
   }
 
-  private onPurchaseCompleted(payload: any): void {
+  private onPurchaseCompleted = (payload: any): void => {
     if (payload && payload.sku === this.sku) {
-      // Можно показать тост, но необязательно
+      // Можно дополнительно обновить UI, но основная логика уже в purchase()
     }
-  }
+  };
 
-  private onPurchaseFailed(payload: any): void {
+  private onPurchaseFailed = (payload: any): void => {
     if (payload && payload.error) {
       console.warn('Purchase failed:', payload.error);
     }
-  }
+  };
 }
